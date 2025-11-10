@@ -1,0 +1,329 @@
+"""
+Bot de Scalping para Binance usando CCXT
+Estrategia basada en EMA de 20 periodos con Take Profit y Stop Loss
+
+El bot opera en modo sandbox por defecto (paper trading).
+Para activar el trading real, cambiar ENABLE_REAL_TRADING a True en config.py
+"""
+
+import ccxt
+import time
+import sys
+from datetime import datetime
+import config
+import utils
+
+
+class ScalpingBot:
+    """
+    Bot de trading tipo scalping para Binance
+    """
+    
+    def __init__(self):
+        """
+        Inicializa el bot con la configuración de config.py
+        """
+        self.symbol = config.SYMBOL
+        self.timeframe = config.TIMEFRAME
+        self.ema_period = config.EMA_PERIOD
+        self.position_size = config.POSITION_SIZE_USDT
+        self.take_profit = config.TAKE_PROFIT_PERCENT
+        self.stop_loss = config.STOP_LOSS_PERCENT
+        self.loop_interval = config.LOOP_INTERVAL
+        self.enable_real_trading = config.ENABLE_REAL_TRADING
+        
+        # Estado del bot
+        self.in_position = False
+        self.entry_price = 0.0
+        self.position_amount = 0.0
+        
+        # Configurar exchange
+        self.exchange = self._setup_exchange()
+        
+        # Mostrar configuración
+        self._print_configuration()
+    
+    def _setup_exchange(self) -> ccxt.Exchange:
+        """
+        Configura y retorna la instancia del exchange de Binance
+        
+        Returns:
+            Instancia configurada de ccxt.binance
+        """
+        try:
+            exchange = ccxt.binance({
+                'apiKey': config.API_KEY,
+                'secret': config.API_SECRET,
+                'enableRateLimit': True,
+                'options': {
+                    'defaultType': 'spot',  # Usar mercado spot
+                }
+            })
+            
+            # Configurar para sandbox/testnet si está habilitado
+            if config.USE_SANDBOX and not self.enable_real_trading:
+                exchange.set_sandbox_mode(True)
+                print("⚠️  MODO SANDBOX ACTIVADO - No se usará dinero real")
+            
+            # Verificar conexión
+            exchange.load_markets()
+            print(f"✅ Conectado a Binance exitosamente")
+            
+            return exchange
+        except Exception as e:
+            print(f"❌ Error configurando exchange: {e}")
+            sys.exit(1)
+    
+    def _print_configuration(self):
+        """
+        Muestra la configuración actual del bot
+        """
+        print("\n" + "="*60)
+        print("🤖 BOT DE SCALPING - CONFIGURACIÓN")
+        print("="*60)
+        print(f"Símbolo: {self.symbol}")
+        print(f"Timeframe: {self.timeframe}")
+        print(f"Periodo EMA: {self.ema_period}")
+        print(f"Tamaño de posición: {self.position_size} USDT")
+        print(f"Take Profit: +{self.take_profit}%")
+        print(f"Stop Loss: -{self.stop_loss}%")
+        print(f"Intervalo de loop: {self.loop_interval} segundos")
+        
+        if self.enable_real_trading:
+            print("⚠️  TRADING REAL ACTIVADO ⚠️")
+        else:
+            print("📝 MODO SIMULACIÓN (Paper Trading)")
+        
+        print("="*60 + "\n")
+    
+    def run(self):
+        """
+        Loop principal del bot
+        """
+        print(f"🚀 Iniciando bot de scalping...")
+        print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        
+        retry_count = 0
+        max_retries = 3
+        
+        while True:
+            try:
+                # Ejecutar ciclo de trading
+                self._trading_cycle()
+                
+                # Resetear contador de reintentos si el ciclo fue exitoso
+                retry_count = 0
+                
+                # Esperar antes del próximo ciclo
+                time.sleep(self.loop_interval)
+                
+            except ccxt.NetworkError as e:
+                retry_count += 1
+                print(f"\n⚠️  Error de red ({retry_count}/{max_retries}): {e}")
+                
+                if retry_count >= max_retries:
+                    print("❌ Máximo de reintentos alcanzado. Deteniendo bot...")
+                    break
+                
+                print(f"🔄 Reintentando en {self.loop_interval * 2} segundos...")
+                time.sleep(self.loop_interval * 2)
+                
+            except ccxt.ExchangeError as e:
+                print(f"\n❌ Error del exchange: {e}")
+                print(f"⏸️  Pausando por {self.loop_interval * 2} segundos...")
+                time.sleep(self.loop_interval * 2)
+                
+            except KeyboardInterrupt:
+                print("\n\n⏹️  Bot detenido por el usuario")
+                if self.in_position:
+                    print(f"⚠️  ADVERTENCIA: Hay una posición abierta en {self.symbol}")
+                    print(f"   Precio de entrada: ${self.entry_price:.2f}")
+                break
+                
+            except Exception as e:
+                print(f"\n❌ Error inesperado: {e}")
+                print(f"⏸️  Pausando por {self.loop_interval * 2} segundos...")
+                time.sleep(self.loop_interval * 2)
+    
+    def _trading_cycle(self):
+        """
+        Ejecuta un ciclo completo de la estrategia de trading
+        """
+        # Obtener precio actual
+        current_price = utils.get_current_price(self.exchange, self.symbol)
+        if current_price is None:
+            print("⚠️  No se pudo obtener el precio actual")
+            return
+        
+        # Obtener datos históricos para calcular EMA
+        ohlcv_data = utils.get_ohlcv_data(
+            self.exchange, 
+            self.symbol, 
+            self.timeframe, 
+            limit=self.ema_period + 10
+        )
+        
+        if ohlcv_data is None or len(ohlcv_data) < self.ema_period:
+            print("⚠️  No hay suficientes datos para calcular EMA")
+            return
+        
+        # Calcular EMA
+        ema = utils.calculate_ema(ohlcv_data, self.ema_period)
+        if ema is None:
+            print("⚠️  No se pudo calcular la EMA")
+            return
+        
+        # Mostrar información actual
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        print(f"\n[{timestamp}] 📊 Estado del mercado:")
+        print(f"  💰 Precio actual: ${current_price:.2f}")
+        print(f"  📈 EMA({self.ema_period}): ${ema:.2f}")
+        
+        # Lógica de trading
+        if not self.in_position:
+            # No estamos en posición - buscar señal de compra
+            if utils.should_buy(current_price, ema):
+                self._execute_buy(current_price)
+        else:
+            # Estamos en posición - verificar si debemos vender
+            profit_loss_percent = utils.calculate_profit_loss_percent(
+                self.entry_price, 
+                current_price
+            )
+            
+            print(f"  📍 En posición desde: ${self.entry_price:.2f}")
+            
+            # Mostrar P/L con color
+            if profit_loss_percent >= 0:
+                print(f"  💹 P/L: +{profit_loss_percent:.2f}% (ganancia)")
+            else:
+                print(f"  📉 P/L: {profit_loss_percent:.2f}% (pérdida)")
+            
+            # Verificar condiciones de salida
+            should_exit, reason = utils.should_sell(
+                self.entry_price,
+                current_price,
+                self.take_profit,
+                self.stop_loss
+            )
+            
+            if should_exit:
+                self._execute_sell(current_price, reason)
+    
+    def _execute_buy(self, current_price: float):
+        """
+        Ejecuta una orden de compra
+        
+        Args:
+            current_price: Precio actual del activo
+        """
+        print(f"\n🟢 SEÑAL DE COMPRA DETECTADA")
+        print(f"   Precio > EMA: ${current_price:.2f}")
+        
+        order = utils.create_market_buy_order(
+            self.exchange,
+            self.symbol,
+            self.position_size,
+            self.enable_real_trading
+        )
+        
+        if order:
+            self.in_position = True
+            self.entry_price = current_price
+            
+            # Calcular cantidad comprada (aproximada en modo simulación)
+            base_currency = self.symbol.split('/')[0]
+            self.position_amount = self.position_size / current_price
+            
+            print(f"✅ Orden de compra ejecutada")
+            print(f"   Precio de entrada: ${self.entry_price:.2f}")
+            print(f"   Cantidad: {self.position_amount:.6f} {base_currency}")
+            print(f"   Total: {self.position_size} USDT")
+            
+            if not self.enable_real_trading:
+                print(f"   [SIMULACIÓN - No se ejecutó orden real]")
+        else:
+            print(f"❌ No se pudo ejecutar la orden de compra")
+    
+    def _execute_sell(self, current_price: float, reason: str):
+        """
+        Ejecuta una orden de venta
+        
+        Args:
+            current_price: Precio actual del activo
+            reason: Razón de la venta (TP o SL)
+        """
+        print(f"\n🔴 SEÑAL DE VENTA DETECTADA")
+        print(f"   Razón: {reason}")
+        
+        order = utils.create_market_sell_order(
+            self.exchange,
+            self.symbol,
+            self.position_amount,
+            self.enable_real_trading
+        )
+        
+        if order:
+            profit_loss_percent = utils.calculate_profit_loss_percent(
+                self.entry_price,
+                current_price
+            )
+            
+            profit_loss_usd = (current_price - self.entry_price) * self.position_amount
+            
+            print(f"✅ Orden de venta ejecutada")
+            print(f"   Precio de salida: ${current_price:.2f}")
+            print(f"   Cantidad: {self.position_amount:.6f}")
+            
+            if profit_loss_percent >= 0:
+                print(f"   💰 Ganancia: +{profit_loss_percent:.2f}% (+${profit_loss_usd:.2f})")
+            else:
+                print(f"   💸 Pérdida: {profit_loss_percent:.2f}% (${profit_loss_usd:.2f})")
+            
+            if not self.enable_real_trading:
+                print(f"   [SIMULACIÓN - No se ejecutó orden real]")
+            
+            # Resetear estado
+            self.in_position = False
+            self.entry_price = 0.0
+            self.position_amount = 0.0
+        else:
+            print(f"❌ No se pudo ejecutar la orden de venta")
+
+
+def main():
+    """
+    Función principal para iniciar el bot
+    """
+    # Verificar que las credenciales estén configuradas
+    if config.API_KEY == 'your api key' or config.API_SECRET == 'your api secret':
+        print("❌ ERROR: Configura tus credenciales de API en config.py")
+        print("   Para obtener credenciales: https://www.binance.com/en/my/settings/api-management")
+        
+        if config.USE_SANDBOX:
+            print("\n💡 NOTA: Estás en modo SANDBOX. Puedes usar credenciales de testnet:")
+            print("   https://testnet.binance.vision/")
+        
+        return
+    
+    # Advertencia si el trading real está activado
+    if config.ENABLE_REAL_TRADING:
+        print("\n" + "="*60)
+        print("⚠️  ADVERTENCIA: TRADING REAL ACTIVADO ⚠️")
+        print("="*60)
+        print("Este bot ejecutará órdenes REALES en Binance.")
+        print("Asegúrate de entender los riesgos antes de continuar.")
+        print("="*60)
+        
+        response = input("\n¿Estás seguro de continuar con trading real? (escribe 'SI' para confirmar): ")
+        if response != 'SI':
+            print("❌ Operación cancelada por el usuario")
+            return
+    
+    # Crear e iniciar el bot
+    bot = ScalpingBot()
+    bot.run()
+
+
+if __name__ == "__main__":
+    main()
