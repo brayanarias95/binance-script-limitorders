@@ -77,7 +77,7 @@ def calculate_ema(data: pd.DataFrame, period: int, column: str = 'close') -> Opt
 
 def should_buy(current_price: float, ema: float) -> bool:
     """
-    Determina si se debe comprar basado en la estrategia
+    Determina si se debe comprar (LONG) basado en la estrategia
     Compra cuando el precio cierra por encima de la EMA
     
     Args:
@@ -88,6 +88,21 @@ def should_buy(current_price: float, ema: float) -> bool:
         True si se debe comprar, False en caso contrario
     """
     return current_price > ema
+
+
+def should_sell_short(current_price: float, ema: float) -> bool:
+    """
+    Determina si se debe vender en corto (SHORT) basado en la estrategia
+    Vende en corto cuando el precio cierra por debajo de la EMA
+    
+    Args:
+        current_price: Precio actual
+        ema: Valor de la EMA
+        
+    Returns:
+        True si se debe vender en corto, False en caso contrario
+    """
+    return current_price < ema
 
 
 def calculate_profit_loss_percent(entry_price: float, current_price: float) -> float:
@@ -106,20 +121,26 @@ def calculate_profit_loss_percent(entry_price: float, current_price: float) -> f
     return ((current_price - entry_price) / entry_price) * 100
 
 
-def should_sell(entry_price: float, current_price: float, take_profit_percent: float, stop_loss_percent: float) -> tuple[bool, str]:
+def should_sell(entry_price: float, current_price: float, take_profit_percent: float, 
+                stop_loss_percent: float, position_side: str = 'LONG') -> tuple[bool, str]:
     """
-    Determina si se debe vender basado en el take profit o stop loss
+    Determina si se debe cerrar la posición basado en el take profit o stop loss
     
     Args:
         entry_price: Precio de entrada
         current_price: Precio actual
         take_profit_percent: Porcentaje de ganancia objetivo
         stop_loss_percent: Porcentaje de pérdida máxima
+        position_side: 'LONG' o 'SHORT'
         
     Returns:
         Tupla (should_sell: bool, reason: str)
     """
-    profit_loss_percent = calculate_profit_loss_percent(entry_price, current_price)
+    if position_side == 'LONG':
+        profit_loss_percent = calculate_profit_loss_percent(entry_price, current_price)
+    else:  # SHORT
+        # Para SHORT, ganamos cuando el precio baja
+        profit_loss_percent = -calculate_profit_loss_percent(entry_price, current_price)
     
     if profit_loss_percent >= take_profit_percent:
         return True, f"TAKE PROFIT alcanzado: +{profit_loss_percent:.2f}%"
@@ -129,22 +150,24 @@ def should_sell(entry_price: float, current_price: float, take_profit_percent: f
     return False, ""
 
 
-def create_market_buy_order(exchange: ccxt.Exchange, symbol: str, amount_usdt: float, enable_real_trading: bool) -> Optional[Dict[str, Any]]:
+def create_market_buy_order(exchange: ccxt.Exchange, symbol: str, amount_usdt: float, 
+                           enable_real_trading: bool, use_futures: bool = False) -> Optional[Dict[str, Any]]:
     """
-    Crea una orden de compra de mercado
+    Crea una orden de compra de mercado (LONG en Futures)
     
     Args:
         exchange: Instancia del exchange de CCXT
         symbol: Par de trading
         amount_usdt: Cantidad en USDT a comprar
         enable_real_trading: Si está habilitado el trading real
+        use_futures: Si se está usando Futures
         
     Returns:
         Información de la orden o None si hay error
     """
     try:
         if not enable_real_trading:
-            print(f"[MODO SIMULACIÓN] Orden de compra: {amount_usdt} USDT de {symbol}")
+            print(f"[MODO SIMULACIÓN] Orden de compra LONG: {amount_usdt} USDT de {symbol}")
             return {
                 'id': 'sim_' + str(int(time.time())),
                 'symbol': symbol,
@@ -158,31 +181,60 @@ def create_market_buy_order(exchange: ccxt.Exchange, symbol: str, amount_usdt: f
         # Obtener el precio actual para calcular la cantidad
         ticker = exchange.fetch_ticker(symbol)
         current_price = ticker['last']
-        amount = amount_usdt / current_price
         
-        order = exchange.create_market_buy_order(symbol, amount)
+        # Usar $5.50 para estar bien por encima del mínimo de $5
+        # Esto evita problemas con redondeo y fluctuaciones de precio
+        amount_usdt_safe = max(amount_usdt, 5.5)
+        amount = amount_usdt_safe / current_price
+        
+        # Redondear hacia ARRIBA para asegurar que el notional sea suficiente
+        import math
+        amount = math.ceil(amount * 10) / 10  # Redondear hacia arriba a 1 decimal
+        
+        # Verificar que el notional sea suficiente
+        notional = amount * current_price
+        
+        if use_futures:
+            print(f"   DEBUG: Creando LONG - Precio: ${current_price:.4f}, Cantidad: {amount} DOGE, Notional: ${notional:.2f} USDT")
+            
+            # Verificación adicional
+            if notional < 5.2:
+                print(f"   ⚠️ Notional ${notional:.2f} muy cerca del mínimo. Ajustando más...")
+                amount = math.ceil((6.0 / current_price) * 10) / 10
+                notional = amount * current_price
+                print(f"   ✅ Cantidad ajustada: {amount} DOGE, Notional: ${notional:.2f} USDT")
+            
+            # En Futures, usar create_market_buy_order directamente
+            order = exchange.create_market_buy_order(symbol, amount)
+        else:
+            order = exchange.create_market_buy_order(symbol, amount)
+        
         return order
     except Exception as e:
         print(f"Error creando orden de compra: {e}")
         return None
 
 
-def create_market_sell_order(exchange: ccxt.Exchange, symbol: str, amount: float, enable_real_trading: bool) -> Optional[Dict[str, Any]]:
+def create_market_sell_order(exchange: ccxt.Exchange, symbol: str, amount: float, 
+                             enable_real_trading: bool, use_futures: bool = False,
+                             position_side: str = 'LONG') -> Optional[Dict[str, Any]]:
     """
-    Crea una orden de venta de mercado
+    Crea una orden de venta de mercado (cierra LONG en Futures)
     
     Args:
         exchange: Instancia del exchange de CCXT
         symbol: Par de trading
         amount: Cantidad de activo a vender
         enable_real_trading: Si está habilitado el trading real
+        use_futures: Si se está usando Futures
+        position_side: 'LONG' o 'SHORT'
         
     Returns:
         Información de la orden o None si hay error
     """
     try:
         if not enable_real_trading:
-            print(f"[MODO SIMULACIÓN] Orden de venta: {amount} de {symbol}")
+            print(f"[MODO SIMULACIÓN] Orden de venta (cerrar {position_side}): {amount} de {symbol}")
             return {
                 'id': 'sim_' + str(int(time.time())),
                 'symbol': symbol,
@@ -193,10 +245,127 @@ def create_market_sell_order(exchange: ccxt.Exchange, symbol: str, amount: float
                 'simulated': True
             }
         
-        order = exchange.create_market_sell_order(symbol, amount)
+        # Redondear cantidad
+        amount = round(amount, 1)
+        
+        if use_futures:
+            print(f"   DEBUG: Cerrando LONG - Cantidad: {amount} DOGE")
+            # En Futures, cerrar LONG con sell
+            order = exchange.create_market_sell_order(symbol, amount)
+        else:
+            order = exchange.create_market_sell_order(symbol, amount)
+        
         return order
     except Exception as e:
         print(f"Error creando orden de venta: {e}")
+        return None
+
+
+def create_short_order(exchange: ccxt.Exchange, symbol: str, amount_usdt: float, 
+                      enable_real_trading: bool) -> Optional[Dict[str, Any]]:
+    """
+    Crea una orden SHORT (venta en corto) en Futures
+    
+    Args:
+        exchange: Instancia del exchange de CCXT
+        symbol: Par de trading
+        amount_usdt: Cantidad en USDT para la posición
+        enable_real_trading: Si está habilitado el trading real
+        
+    Returns:
+        Información de la orden o None si hay error
+    """
+    try:
+        if not enable_real_trading:
+            print(f"[MODO SIMULACIÓN] Orden SHORT: {amount_usdt} USDT de {symbol}")
+            return {
+                'id': 'sim_' + str(int(time.time())),
+                'symbol': symbol,
+                'type': 'market',
+                'side': 'sell',
+                'amount': amount_usdt,
+                'status': 'closed',
+                'simulated': True,
+                'positionSide': 'SHORT'
+            }
+        
+        # Obtener el precio actual para calcular la cantidad
+        ticker = exchange.fetch_ticker(symbol)
+        current_price = ticker['last']
+        
+        # Usar $5.50 para estar bien por encima del mínimo de $5
+        amount_usdt_safe = max(amount_usdt, 5.5)
+        amount = amount_usdt_safe / current_price
+        
+        # Redondear hacia ARRIBA para asegurar que el notional sea suficiente
+        import math
+        amount = math.ceil(amount * 10) / 10
+        
+        # Verificar que el notional sea suficiente
+        notional = amount * current_price
+        
+        print(f"   DEBUG: Creando SHORT - Precio: ${current_price:.4f}, Cantidad: {amount} DOGE, Notional: ${notional:.2f} USDT")
+        
+        # Verificación adicional
+        if notional < 5.2:
+            print(f"   ⚠️ Notional ${notional:.2f} muy cerca del mínimo. Ajustando más...")
+            amount = math.ceil((6.0 / current_price) * 10) / 10
+            notional = amount * current_price
+            print(f"   ✅ Cantidad ajustada: {amount} DOGE, Notional: ${notional:.2f} USDT")
+        
+        # Abrir posición SHORT con sell
+        order = exchange.create_market_sell_order(
+            symbol=symbol,
+            amount=amount
+        )
+        
+        return order
+    except Exception as e:
+        print(f"Error creando orden SHORT: {e}")
+        return None
+
+
+def close_short_order(exchange: ccxt.Exchange, symbol: str, amount: float, 
+                     enable_real_trading: bool) -> Optional[Dict[str, Any]]:
+    """
+    Cierra una posición SHORT en Futures
+    
+    Args:
+        exchange: Instancia del exchange de CCXT
+        symbol: Par de trading
+        amount: Cantidad a cerrar
+        enable_real_trading: Si está habilitado el trading real
+        
+    Returns:
+        Información de la orden o None si hay error
+    """
+    try:
+        if not enable_real_trading:
+            print(f"[MODO SIMULACIÓN] Cerrar SHORT: {amount} de {symbol}")
+            return {
+                'id': 'sim_' + str(int(time.time())),
+                'symbol': symbol,
+                'type': 'market',
+                'side': 'buy',
+                'amount': amount,
+                'status': 'closed',
+                'simulated': True
+            }
+        
+        # Redondear cantidad
+        amount = round(amount, 1)
+        
+        print(f"   DEBUG: Cerrando SHORT - Cantidad: {amount} DOGE")
+        
+        # Cerrar posición SHORT con buy (comprar de vuelta)
+        order = exchange.create_market_buy_order(
+            symbol=symbol,
+            amount=amount
+        )
+        
+        return order
+    except Exception as e:
+        print(f"Error cerrando orden SHORT: {e}")
         return None
 
 
