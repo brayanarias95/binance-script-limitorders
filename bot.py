@@ -2,6 +2,7 @@ from ast import If
 from symtable import Symbol
 import time
 from binance.client import Client
+from binance.exceptions import BinanceAPIException
 import config
 import keyboard
 
@@ -14,6 +15,98 @@ binance_client = Client(user_key, secret_key)
 #cuanto apalancamiento leverage
 apalancamiento=50
 binance_client.futures_change_leverage(symbol="1000SHIBUSDT", leverage=apalancamiento)
+
+
+def create_order_with_retry(symbol, side, precio, cantidad_inicial, apalancamiento):
+    """
+    Crea una orden de futuros con manejo de error -2019 (margen insuficiente).
+    Si hay error -2019, recalcula la cantidad basada en el balance disponible.
+    
+    Args:
+        symbol: Símbolo del par (ej: '1000SHIBUSDT')
+        side: 'BUY' o 'SELL'
+        precio: Precio límite de la orden
+        cantidad_inicial: Cantidad inicial calculada
+        apalancamiento: Apalancamiento configurado
+        
+    Returns:
+        Orden ejecutada o None si falló
+    """
+    try:
+        # Intentar crear la orden con la cantidad inicial
+        orden = binance_client.futures_create_order(
+            symbol=symbol,
+            type='LIMIT',
+            timeInForce='GTC',
+            price=precio,
+            side=side,
+            quantity=cantidad_inicial
+        )
+        return orden
+        
+    except BinanceAPIException as e:
+        # Verificar si es error -2019 (Margin insuficiente)
+        if e.code == -2019:
+            print(f"⚠️  Error -2019 (Margin insuficiente). Intentando reducir cantidad inicial: {cantidad_inicial}")
+            
+            # Obtener balance disponible actualizado
+            balance = binance_client.futures_account_balance()
+            saldo_disponible = 0.0
+            for x in balance:
+                if x['asset'] == 'USDT':
+                    saldo_disponible = float(x['availableBalance'])
+            
+            # Calcular nueva cantidad basada en saldo disponible
+            # Usar solo el 95% del disponible para dejar margen de seguridad
+            cantidad_ajustada = int((saldo_disponible / precio) * 0.95) * apalancamiento
+            notional = cantidad_ajustada * precio
+            
+            print(f"   ↘ Probando cantidad basada en balance disponible: {cantidad_ajustada} (notional={notional:.4f})")
+            
+            # Verificar que la nueva cantidad sea válida
+            if cantidad_ajustada <= 0:
+                print(f"❌ Balance insuficiente. Saldo disponible: {saldo_disponible} USDT")
+                return None
+            
+            try:
+                # Reintentar con la cantidad ajustada
+                orden = binance_client.futures_create_order(
+                    symbol=symbol,
+                    type='LIMIT',
+                    timeInForce='GTC',
+                    price=precio,
+                    side=side,
+                    quantity=cantidad_ajustada
+                )
+                
+                # Mostrar detalles de la posición resultante
+                print(f"✅ Orden ejecutada con cantidad ajustada: {cantidad_ajustada}")
+                time.sleep(0.2)
+                
+                # Obtener detalles de la posición
+                position = binance_client.futures_position_information(symbol=symbol)
+                for pos in position:
+                    if pos['symbol'] == symbol:
+                        print(f"📊 Detalles de la posición:")
+                        print(f"   • Cantidad (posAmt): {pos['positionAmt']}")
+                        print(f"   • Precio entrada (entryPrice): {pos['entryPrice']}")
+                        print(f"   • Precio liquidación (liquidationPrice): {pos['liquidationPrice']}")
+                        print(f"   • PnL no realizado: {pos['unRealizedProfit']} USDT")
+                        print(f"   • Apalancamiento: {pos['leverage']}x")
+                        break
+                
+                return orden
+                
+            except BinanceAPIException as e2:
+                print(f"❌ Error al reintentar con cantidad ajustada: {e2}")
+                return None
+        else:
+            # Otro tipo de error de API
+            print(f"❌ Error de Binance API ({e.code}): {e.message}")
+            return None
+    except Exception as e:
+        print(f"❌ Error inesperado: {e}")
+        return None
 
 
 
@@ -43,16 +136,20 @@ while True:
         print(saldo)
         precio=float(precioshib['price'])
         cantidadshiba=int((saldo/precio)*0.98)*apalancamiento
-        print(cantidadshiba)
+        print(f"Cantidad inicial calculada: {cantidadshiba}")
+        
         #orden de comprar
-        binance_client.futures_create_order(
-        symbol='1000SHIBUSDT',
-        type='LIMIT',
-        timeInForce='GTC',
-        price=precio ,
-        side='BUY',
-        quantity=cantidadshiba
+        orden_result = create_order_with_retry(
+            symbol='1000SHIBUSDT',
+            side='BUY',
+            precio=precio,
+            cantidad_inicial=cantidadshiba,
+            apalancamiento=apalancamiento
         )
+        
+        if orden_result is None:
+            print("❌ No se pudo ejecutar la orden de compra")
+            continue
         time.sleep(0.2)
         espera=True
         while espera == True:
@@ -101,16 +198,20 @@ while True:
         print(saldo)
         precio=float(precioshib['price'])
         cantidadshiba=int((saldo/precio)*0.98)*apalancamiento
-        print(cantidadshiba)
+        print(f"Cantidad inicial calculada: {cantidadshiba}")
+        
         #orden de vender
-        binance_client.futures_create_order(
-        symbol='1000SHIBUSDT',
-        type='LIMIT',
-        timeInForce='GTC',
-        price=precio ,
-        side='SELL',
-        quantity=cantidadshiba
+        orden_result = create_order_with_retry(
+            symbol='1000SHIBUSDT',
+            side='SELL',
+            precio=precio,
+            cantidad_inicial=cantidadshiba,
+            apalancamiento=apalancamiento
         )
+        
+        if orden_result is None:
+            print("❌ No se pudo ejecutar la orden de venta")
+            continue
         time.sleep(0.2)
         espera=True
         while espera == True:
