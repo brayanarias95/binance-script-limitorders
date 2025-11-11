@@ -466,3 +466,217 @@ def get_balance(exchange: ccxt.Exchange, currency: str) -> Optional[float]:
     except Exception as e:
         print(f"Error obteniendo balance: {e}")
         return None
+
+
+def get_open_positions(exchange: ccxt.Exchange, symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    Obtiene las posiciones abiertas en Futures para un símbolo específico
+    
+    Args:
+        exchange: Instancia del exchange de CCXT
+        symbol: Par de trading (ej: 'DOGE/USDT')
+        
+    Returns:
+        Dict con información de la posición o None si no hay posición abierta
+    """
+    try:
+        positions = exchange.fetch_positions([symbol])
+        
+        for pos in positions:
+            # Verificar si hay una posición abierta (cantidad != 0)
+            contracts = float(pos.get('contracts', 0))
+            if contracts != 0:
+                return {
+                    'symbol': pos['symbol'],
+                    'side': 'LONG' if contracts > 0 else 'SHORT',
+                    'contracts': abs(contracts),
+                    'entryPrice': float(pos.get('entryPrice', 0)),
+                    'markPrice': float(pos.get('markPrice', 0)),
+                    'unrealizedPnl': float(pos.get('unrealizedPnl', 0)),
+                    'leverage': float(pos.get('leverage', 1))
+                }
+        
+        return None
+    except Exception as e:
+        print(f"Error obteniendo posiciones: {e}")
+        return None
+
+
+def create_limit_buy_order(exchange: ccxt.Exchange, symbol: str, amount_usdt: float,
+                          limit_price: float, enable_real_trading: bool) -> Optional[Dict[str, Any]]:
+    """
+    Crea una orden de compra LIMIT (LONG en Futures)
+    
+    Args:
+        exchange: Instancia del exchange de CCXT
+        symbol: Par de trading
+        amount_usdt: Cantidad en USDT a comprar
+        limit_price: Precio límite para la orden
+        enable_real_trading: Si está habilitado el trading real
+        
+    Returns:
+        Información de la orden o None si hay error
+    """
+    try:
+        if not enable_real_trading:
+            print(f"[MODO SIMULACIÓN] Orden LIMIT de compra LONG: {amount_usdt} USDT de {symbol} a ${limit_price:.4f}")
+            return {
+                'id': 'sim_' + str(int(time.time())),
+                'symbol': symbol,
+                'type': 'limit',
+                'side': 'buy',
+                'price': limit_price,
+                'amount': amount_usdt / limit_price,
+                'status': 'open',
+                'simulated': True
+            }
+        
+        # Calcular cantidad basada en el precio límite
+        amount = amount_usdt / limit_price
+        
+        # Redondear hacia arriba
+        import math
+        amount = math.ceil(amount * 10) / 10
+        
+        print(f"   DEBUG: Creando LIMIT LONG - Precio: ${limit_price:.4f}, Cantidad: {amount}, Notional: ${amount * limit_price:.2f} USDT")
+        
+        # Crear orden limit
+        order = exchange.create_limit_buy_order(symbol, amount, limit_price)
+        
+        return order
+    except Exception as e:
+        print(f"Error creando orden limit de compra: {e}")
+        return None
+
+
+def create_limit_sell_order(exchange: ccxt.Exchange, symbol: str, amount: float,
+                           limit_price: float, enable_real_trading: bool,
+                           position_side: str = 'LONG') -> Optional[Dict[str, Any]]:
+    """
+    Crea una orden de venta LIMIT (cierra LONG en Futures)
+    
+    Args:
+        exchange: Instancia del exchange de CCXT
+        symbol: Par de trading
+        amount: Cantidad de activo a vender
+        limit_price: Precio límite para la orden
+        enable_real_trading: Si está habilitado el trading real
+        position_side: 'LONG' o 'SHORT'
+        
+    Returns:
+        Información de la orden o None si hay error
+    """
+    try:
+        if not enable_real_trading:
+            print(f"[MODO SIMULACIÓN] Orden LIMIT de venta (cerrar {position_side}): {amount} de {symbol} a ${limit_price:.4f}")
+            return {
+                'id': 'sim_' + str(int(time.time())),
+                'symbol': symbol,
+                'type': 'limit',
+                'side': 'sell',
+                'price': limit_price,
+                'amount': amount,
+                'status': 'open',
+                'simulated': True
+            }
+        
+        # Redondear cantidad
+        amount = round(amount, 1)
+        
+        print(f"   DEBUG: Creando LIMIT SELL - Cantidad: {amount}, Precio: ${limit_price:.4f}")
+        
+        # Crear orden limit de venta
+        order = exchange.create_limit_sell_order(symbol, amount, limit_price)
+        
+        return order
+    except Exception as e:
+        print(f"Error creando orden limit de venta: {e}")
+        return None
+
+
+def create_limit_short_order(exchange: ccxt.Exchange, symbol: str, amount_usdt: float,
+                            limit_price: float, enable_real_trading: bool) -> Optional[Dict[str, Any]]:
+    """
+    Crea una orden LIMIT SHORT (venta en corto) en Futures
+    
+    Args:
+        exchange: Instancia del exchange de CCXT
+        symbol: Par de trading
+        amount_usdt: Cantidad en USDT para la posición
+        limit_price: Precio límite para la orden
+        enable_real_trading: Si está habilitado el trading real
+        
+    Returns:
+        Información de la orden o None si hay error
+    """
+    try:
+        if not enable_real_trading:
+            print(f"[MODO SIMULACIÓN] Orden LIMIT SHORT: {amount_usdt} USDT de {symbol} a ${limit_price:.4f}")
+            return {
+                'id': 'sim_' + str(int(time.time())),
+                'symbol': symbol,
+                'type': 'limit',
+                'side': 'sell',
+                'price': limit_price,
+                'amount': amount_usdt / limit_price,
+                'status': 'open',
+                'simulated': True,
+                'positionSide': 'SHORT'
+            }
+        
+        # Calcular cantidad basada en el precio límite
+        import math
+        amount = math.ceil((amount_usdt / limit_price) * 10) / 10
+        
+        print(f"   DEBUG: Creando LIMIT SHORT - Precio: ${limit_price:.4f}, Cantidad: {amount}, Notional: ${amount * limit_price:.2f} USDT")
+        
+        # Crear orden limit SHORT
+        order = exchange.create_limit_sell_order(symbol, amount, limit_price)
+        
+        return order
+    except Exception as e:
+        print(f"Error creando orden LIMIT SHORT: {e}")
+        return None
+
+
+def close_limit_short_order(exchange: ccxt.Exchange, symbol: str, amount: float,
+                           limit_price: float, enable_real_trading: bool) -> Optional[Dict[str, Any]]:
+    """
+    Cierra una posición SHORT con orden LIMIT en Futures
+    
+    Args:
+        exchange: Instancia del exchange de CCXT
+        symbol: Par de trading
+        amount: Cantidad a cerrar
+        limit_price: Precio límite para la orden
+        enable_real_trading: Si está habilitado el trading real
+        
+    Returns:
+        Información de la orden o None si hay error
+    """
+    try:
+        if not enable_real_trading:
+            print(f"[MODO SIMULACIÓN] Cerrar LIMIT SHORT: {amount} de {symbol} a ${limit_price:.4f}")
+            return {
+                'id': 'sim_' + str(int(time.time())),
+                'symbol': symbol,
+                'type': 'limit',
+                'side': 'buy',
+                'price': limit_price,
+                'amount': amount,
+                'status': 'open',
+                'simulated': True
+            }
+        
+        # Redondear cantidad
+        amount = round(amount, 1)
+        
+        print(f"   DEBUG: Cerrando LIMIT SHORT - Cantidad: {amount}, Precio: ${limit_price:.4f}")
+        
+        # Cerrar SHORT con orden limit de compra
+        order = exchange.create_limit_buy_order(symbol, amount, limit_price)
+        
+        return order
+    except Exception as e:
+        print(f"Error cerrando orden LIMIT SHORT: {e}")
+        return None
