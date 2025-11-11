@@ -34,6 +34,10 @@ class ScalpingBot:
         self.cooldown_seconds = config.COOLDOWN_SECONDS
         self.enable_short_positions = config.ENABLE_SHORT_POSITIONS
         
+        # Stop-Limit configuration
+        self.use_stop_limit = config.USE_STOP_LIMIT
+        self.stop_limit_offset_percent = config.STOP_LIMIT_OFFSET_PERCENT
+        
         # Configuración de Futures
         self.use_futures = config.USE_FUTURES
         self.leverage = config.LEVERAGE
@@ -285,6 +289,48 @@ class ScalpingBot:
             if should_exit:
                 self._execute_sell(current_price, reason)
     
+    def _place_stop_limit_order(self):
+        """
+        Coloca una orden stop-limit para proteger la posición actual
+        """
+        if not self.in_position or self.position_side is None:
+            return
+        
+        # Calcular precio de stop (trigger) basado en el stop loss configurado
+        if self.position_side == 'LONG':
+            # Para LONG: stop loss es cuando el precio cae
+            trigger_price = self.entry_price * (1 - self.stop_loss / 100)
+            # Limit price es ligeramente por debajo del trigger
+            limit_price = trigger_price * (1 - self.stop_limit_offset_percent / 100)
+            # Para cerrar LONG, necesitamos SELL
+            order_side = 'sell'
+        else:  # SHORT
+            # Para SHORT: stop loss es cuando el precio sube
+            trigger_price = self.entry_price * (1 + self.stop_loss / 100)
+            # Limit price es ligeramente por encima del trigger
+            limit_price = trigger_price * (1 + self.stop_limit_offset_percent / 100)
+            # Para cerrar SHORT, necesitamos BUY
+            order_side = 'buy'
+        
+        # Crear la orden stop-limit
+        stop_order = utils.create_stop_limit_order(
+            self.exchange,
+            self.symbol,
+            order_side,
+            self.position_amount,
+            trigger_price,
+            limit_price,
+            reduce_only=True
+        )
+        
+        if stop_order:
+            print(f"   🛡 Stop-Limit colocado:")
+            print(f"      Trigger: ${trigger_price:.4f}")
+            print(f"      Limit: ${limit_price:.4f}")
+            print(f"      Lado: {order_side.upper()}")
+        else:
+            print(f"   ⚠️ No se pudo colocar el stop-limit")
+    
     def _execute_buy(self, current_price: float, position_side: str):
         """
         Ejecuta una orden de compra (LONG o SHORT)
@@ -335,6 +381,10 @@ class ScalpingBot:
             
             if not self.enable_real_trading:
                 print(f"   [SIMULACIÓN - No se ejecutó orden real]")
+            
+            # Colocar stop-limit si está habilitado y es trading real en Futures
+            if self.use_stop_limit and self.enable_real_trading and self.use_futures:
+                self._place_stop_limit_order()
         else:
             print(f"❌ No se pudo ejecutar la orden {position_side}")
     
@@ -349,6 +399,11 @@ class ScalpingBot:
         side_emoji = "🟢" if self.position_side == 'LONG' else "🔴"
         print(f"\n{side_emoji} SEÑAL DE CIERRE {self.position_side} DETECTADA")
         print(f"   Razón: {reason}")
+        
+        # Cancelar stop-limits pendientes si están habilitados
+        if self.use_stop_limit and self.enable_real_trading and self.use_futures:
+            print(f"   🛡 Cancelando stop-limits pendientes...")
+            utils.cancel_all_stop_orders(self.exchange, self.symbol)
         
         if self.position_side == 'LONG':
             order = utils.create_market_sell_order(

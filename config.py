@@ -19,6 +19,10 @@ POSITION_SIZE_USDT = 5  # Amount in USDT to trade per position (sin apalancamien
 TAKE_PROFIT_PERCENT = 0.6  # ⚠️ Aumentado para compensar comisiones
 STOP_LOSS_PERCENT = 0.4   # ⚠️ Ajustado (mantener ratio 1.5:1)
 
+# Stop-Limit configuration
+USE_STOP_LIMIT = True  # Activar órdenes stop-limit automáticas
+STOP_LIMIT_OFFSET_PERCENT = 0.1  # Offset del precio limit respecto al trigger (0.1 = 0.1%)
+
 # Execution settings
 LOOP_INTERVAL = 3  # Seconds between each loop iteration (3-5 seconds)
 COOLDOWN_SECONDS = 60  # ⚠️ Tiempo de espera después de cerrar posición (evita overtrading)

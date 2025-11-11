@@ -369,6 +369,86 @@ def close_short_order(exchange: ccxt.Exchange, symbol: str, amount: float,
         return None
 
 
+def create_stop_limit_order(exchange: ccxt.Exchange, symbol: str, side: str, 
+                           amount: float, trigger_price: float, limit_price: float,
+                           reduce_only: bool = True) -> Optional[Dict[str, Any]]:
+    """
+    Crea una orden stop-limit en Futures
+    
+    Args:
+        exchange: Instancia del exchange de CCXT
+        symbol: Par de trading
+        side: 'buy' o 'sell' (buy para cerrar SHORT, sell para cerrar LONG)
+        amount: Cantidad del activo
+        trigger_price: Precio de activación del stop
+        limit_price: Precio límite de la orden
+        reduce_only: Si True, solo reduce la posición (no abre nueva)
+        
+    Returns:
+        Información de la orden o None si hay error
+    """
+    try:
+        # Redondear precios a 4 decimales y cantidad a 1 decimal
+        trigger_price = round(trigger_price, 4)
+        limit_price = round(limit_price, 4)
+        amount = round(amount, 1)
+        
+        # Crear orden stop-limit usando la API de Futures
+        params = {
+            'stopPrice': trigger_price,
+            'reduceOnly': reduce_only
+        }
+        
+        order = exchange.create_order(
+            symbol=symbol,
+            type='STOP',
+            side=side,
+            amount=amount,
+            price=limit_price,
+            params=params
+        )
+        
+        return order
+    except Exception as e:
+        print(f"Error creando orden stop-limit: {e}")
+        return None
+
+
+def cancel_all_stop_orders(exchange: ccxt.Exchange, symbol: str) -> bool:
+    """
+    Cancela todas las órdenes stop pendientes para un símbolo
+    
+    Args:
+        exchange: Instancia del exchange de CCXT
+        symbol: Par de trading
+        
+    Returns:
+        True si se cancelaron correctamente, False si hubo error
+    """
+    try:
+        # Obtener órdenes abiertas
+        open_orders = exchange.fetch_open_orders(symbol)
+        
+        # Filtrar solo órdenes de tipo STOP o STOP_MARKET
+        stop_orders = [
+            order for order in open_orders 
+            if order.get('type') in ['STOP', 'STOP_MARKET', 'STOP_LIMIT']
+        ]
+        
+        # Cancelar cada orden stop
+        for order in stop_orders:
+            try:
+                exchange.cancel_order(order['id'], symbol)
+                print(f"   ✅ Stop-limit cancelado: ID {order['id']}")
+            except Exception as e:
+                print(f"   ⚠️ Error cancelando orden {order['id']}: {e}")
+        
+        return True
+    except Exception as e:
+        print(f"Error cancelando órdenes stop: {e}")
+        return False
+
+
 def get_balance(exchange: ccxt.Exchange, currency: str) -> Optional[float]:
     """
     Obtiene el balance disponible de una moneda
