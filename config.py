@@ -13,7 +13,9 @@ LEVERAGE = 10  # ⚠️ Apalancamiento (2-5x recomendado para principiantes, má
 MARGIN_MODE = 'isolated'  # 'isolated' o 'cross' (isolated es más seguro)
 
 # Position sizing
-POSITION_SIZE_USDT = 5  # Amount in USDT to trade per position (sin apalancamiento)
+POSITION_SIZE_USDT = 5  # Amount in USDT to trade per position (sin apalancamiento) - DEPRECATED: se usa balance dinámico
+USE_DYNAMIC_POSITION_SIZE = True  # Usar tamaño de posición dinámico basado en balance disponible
+POSITION_SIZE_PERCENT = 10  # Porcentaje del balance disponible a usar por posición (1-100)
 
 # Risk management
 TAKE_PROFIT_PERCENT = 0.6  # ⚠️ Aumentado para compensar comisiones

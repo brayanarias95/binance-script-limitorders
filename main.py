@@ -27,6 +27,8 @@ class ScalpingBot:
         self.timeframe = config.TIMEFRAME
         self.ema_period = config.EMA_PERIOD
         self.position_size = config.POSITION_SIZE_USDT
+        self.use_dynamic_position_size = config.USE_DYNAMIC_POSITION_SIZE
+        self.position_size_percent = config.POSITION_SIZE_PERCENT
         self.take_profit = config.TAKE_PROFIT_PERCENT
         self.stop_loss = config.STOP_LOSS_PERCENT
         self.loop_interval = config.LOOP_INTERVAL
@@ -140,9 +142,13 @@ class ScalpingBot:
         
         print(f"Timeframe: {self.timeframe}")
         print(f"Periodo EMA: {self.ema_period}")
-        print(f"Tamaño de posición: {self.position_size} USDT")
         
-        if self.use_futures:
+        if self.use_dynamic_position_size:
+            print(f"Tamaño de posición: DINÁMICO ({self.position_size_percent}% del balance disponible)")
+        else:
+            print(f"Tamaño de posición: {self.position_size} USDT (estático)")
+        
+        if self.use_futures and not self.use_dynamic_position_size:
             print(f"Control efectivo: {self.position_size * self.leverage} USDT (con {self.leverage}x)")
         
         print(f"Take Profit: +{self.take_profit}%")
@@ -156,6 +162,34 @@ class ScalpingBot:
             print("📝 MODO SIMULACIÓN (Paper Trading)")
         
         print("="*60 + "\n")
+    
+    def _get_position_size(self) -> float:
+        """
+        Obtiene el tamaño de posición a usar, ya sea estático o dinámico
+        
+        Returns:
+            Tamaño de posición en USDT
+        """
+        if not self.use_dynamic_position_size:
+            return self.position_size
+        
+        # Obtener balance disponible
+        if self.use_futures:
+            available_balance = utils.get_futures_available_balance(self.exchange, 'USDT')
+        else:
+            available_balance = utils.get_balance(self.exchange, 'USDT')
+        
+        if available_balance is None or available_balance <= 0:
+            print(f"⚠️  No se pudo obtener balance disponible. Usando tamaño estático: {self.position_size} USDT")
+            return self.position_size
+        
+        # Calcular tamaño de posición como porcentaje del balance disponible
+        dynamic_size = (available_balance * self.position_size_percent) / 100.0
+        
+        # Asegurar que sea al menos el mínimo (5.5 USDT para estar seguro)
+        dynamic_size = max(dynamic_size, 5.5)
+        
+        return dynamic_size
     
     def run(self):
         """
@@ -342,14 +376,23 @@ class ScalpingBot:
         side_emoji = "🟢" if position_side == 'LONG' else "🔴"
         signal_text = "COMPRA (LONG)" if position_side == 'LONG' else "VENTA (SHORT)"
         
+        # Obtener tamaño de posición dinámico
+        position_size_usdt = self._get_position_size()
+        
         print(f"\n{side_emoji} SEÑAL DE {signal_text} DETECTADA")
         print(f"   Precio: ${current_price:.2f}")
+        
+        if self.use_dynamic_position_size:
+            available_balance = utils.get_futures_available_balance(self.exchange, 'USDT') if self.use_futures else utils.get_balance(self.exchange, 'USDT')
+            if available_balance:
+                print(f"   💰 Balance disponible: ${available_balance:.2f} USDT")
+                print(f"   📊 Tamaño de posición: ${position_size_usdt:.2f} USDT ({self.position_size_percent}% del balance)")
         
         if position_side == 'LONG':
             order = utils.create_market_buy_order(
                 self.exchange,
                 self.symbol,
-                self.position_size,
+                position_size_usdt,
                 self.enable_real_trading,
                 self.use_futures
             )
@@ -357,7 +400,7 @@ class ScalpingBot:
             order = utils.create_short_order(
                 self.exchange,
                 self.symbol,
-                self.position_size,
+                position_size_usdt,
                 self.enable_real_trading
             )
         
@@ -368,16 +411,16 @@ class ScalpingBot:
             
             # Calcular cantidad comprada (aproximada en modo simulación)
             base_currency = self.symbol.split('/')[0]
-            self.position_amount = self.position_size / current_price
+            self.position_amount = position_size_usdt / current_price
             
             print(f"✅ Orden {position_side} ejecutada")
             print(f"   Precio de entrada: ${self.entry_price:.2f}")
             print(f"   Cantidad: {self.position_amount:.6f} {base_currency}")
-            print(f"   Margen: {self.position_size} USDT")
+            print(f"   Margen: {position_size_usdt:.2f} USDT")
             
             if self.use_futures:
-                effective_size = self.position_size * self.leverage
-                print(f"   Control efectivo: {effective_size} USDT (apalancamiento {self.leverage}x)")
+                effective_size = position_size_usdt * self.leverage
+                print(f"   Control efectivo: {effective_size:.2f} USDT (apalancamiento {self.leverage}x)")
             
             if not self.enable_real_trading:
                 print(f"   [SIMULACIÓN - No se ejecutó orden real]")
