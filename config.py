@@ -18,12 +18,9 @@ USE_DYNAMIC_POSITION_SIZE = True  # Usar tamaño de posición dinámico basado e
 POSITION_SIZE_PERCENT = 10  # Porcentaje del balance disponible a usar por posición (1-100)
 
 # Risk management
-TAKE_PROFIT_PERCENT = 0.6  # ⚠️ Aumentado para compensar comisiones
+TAKE_PROFIT_PERCENT = 0.6  # ⚠️ Aumentado para compensar comisiones (DEPRECATED: se usa TARGET_PROFIT_USDT)
 STOP_LOSS_PERCENT = 0.4   # ⚠️ Ajustado (mantener ratio 1.5:1)
-
-# Stop-Limit configuration
-USE_STOP_LIMIT = True  # Activar órdenes stop-limit automáticas
-STOP_LIMIT_OFFSET_PERCENT = 0.1  # Offset del precio limit respecto al trigger (0.1 = 0.1%)
+TARGET_PROFIT_USDT = 2.0  # Ganancia objetivo por operación en USDT
 
 # Execution settings
 LOOP_INTERVAL = 3  # Seconds between each loop iteration (3-5 seconds)
