@@ -468,27 +468,6 @@ def get_balance(exchange: ccxt.Exchange, currency: str) -> Optional[float]:
         return None
 
 
-def get_futures_available_balance(exchange: ccxt.Exchange, currency: str = 'USDT') -> Optional[float]:
-    """
-    Obtiene el balance disponible en la cuenta de Futures
-    
-    Args:
-        exchange: Instancia del exchange de CCXT configurado para Futures
-        currency: Moneda (por defecto 'USDT')
-        
-    Returns:
-        Balance disponible en Futures o None si hay error
-    """
-    try:
-        balance = exchange.fetch_balance()
-        # En Futures, el balance disponible está en 'free'
-        available = balance['free'].get(currency, 0.0)
-        return available
-    except Exception as e:
-        print(f"Error obteniendo balance de Futures: {e}")
-        return None
-
-
 def get_open_positions(exchange: ccxt.Exchange, symbol: str) -> Optional[Dict[str, Any]]:
     """
     Obtiene las posiciones abiertas en Futures para un símbolo específico

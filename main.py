@@ -182,34 +182,6 @@ class ScalpingBot:
         
         print("="*60 + "\n")
     
-    def _get_position_size(self) -> float:
-        """
-        Obtiene el tamaño de posición a usar, ya sea estático o dinámico
-        
-        Returns:
-            Tamaño de posición en USDT
-        """
-        if not self.use_dynamic_position_size:
-            return self.position_size
-        
-        # Obtener balance disponible
-        if self.use_futures:
-            available_balance = utils.get_futures_available_balance(self.exchange, 'USDT')
-        else:
-            available_balance = utils.get_balance(self.exchange, 'USDT')
-        
-        if available_balance is None or available_balance <= 0:
-            print(f"⚠️  No se pudo obtener balance disponible. Usando tamaño estático: {self.position_size} USDT")
-            return self.position_size
-        
-        # Calcular tamaño de posición como porcentaje del balance disponible
-        dynamic_size = (available_balance * self.position_size_percent) / 100.0
-        
-        # Asegurar que sea al menos el mínimo (5.5 USDT para estar seguro)
-        dynamic_size = max(dynamic_size, 5.5)
-        
-        return dynamic_size
-    
     def _check_existing_positions(self):
         """
         Verifica si hay posiciones abiertas al iniciar el bot
@@ -720,6 +692,7 @@ class ScalpingBot:
                 self.exchange,
                 self.symbol,
                 position_size_usdt,
+                self.position_size,
                 limit_price,
                 self.enable_real_trading
             )
@@ -728,6 +701,7 @@ class ScalpingBot:
                 self.exchange,
                 self.symbol,
                 position_size_usdt,
+                self.position_size,
                 limit_price,
                 self.enable_real_trading
             )
@@ -741,6 +715,7 @@ class ScalpingBot:
             # Calcular cantidad comprada
             base_currency = self.symbol.split('/')[0]
             self.position_amount = position_size_usdt / limit_price
+            self.position_amount = self.position_size / limit_price
             
             print(f"✅ Orden LIMIT {position_side} creada")
             print(f"   Estado: Pendiente de ejecución")
@@ -748,6 +723,7 @@ class ScalpingBot:
             print(f"   Precio límite: ${self.entry_price:.4f}")
             print(f"   Cantidad: {self.position_amount:.2f} {base_currency}")
             print(f"   Margen: {position_size_usdt:.2f} USDT")
+            print(f"   Margen: {self.position_size} USDT")
             
             if self.use_futures:
                 effective_size = position_size_usdt * self.leverage
