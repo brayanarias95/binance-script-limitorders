@@ -4,6 +4,10 @@ Estrategia basada en EMA de 20 periodos con Take Profit y Stop Loss
 
 El bot opera en modo sandbox por defecto (paper trading).
 Para activar el trading real, cambiar ENABLE_REAL_TRADING a True en config.py
+
+Modos de operación:
+- Manual: Espera entrada del usuario para ejecutar órdenes
+- Automático: Ejecuta órdenes automáticamente basado en señales
 """
 
 import ccxt
@@ -13,15 +17,25 @@ from datetime import datetime, timedelta
 import config
 import utils
 
+try:
+    import keyboard
+except ImportError:
+    keyboard = None
+    print("⚠️  Advertencia: Módulo 'keyboard' no disponible. Modo manual deshabilitado.")
+
 
 class ScalpingBot:
     """
     Bot de trading tipo scalping para Binance (Futures)
+    Soporta modo manual y automático
     """
     
-    def __init__(self):
+    def __init__(self, operation_mode='automatic'):
         """
         Inicializa el bot con la configuración de config.py
+        
+        Args:
+            operation_mode: 'manual' o 'automatic'
         """
         self.symbol = config.SYMBOL
         self.timeframe = config.TIMEFRAME
@@ -45,12 +59,16 @@ class ScalpingBot:
         self.leverage = config.LEVERAGE
         self.margin_mode = config.MARGIN_MODE
         
+        # Modo de operación
+        self.operation_mode = operation_mode
+        
         # Estado del bot
         self.in_position = False
         self.entry_price = 0.0
         self.position_amount = 0.0
         self.position_side = None  # 'LONG' o 'SHORT'
         self.last_close_time = None  # Timestamp de última posición cerrada
+        self.active_order_id = None  # ID de la orden activa
         
         # Estadísticas
         self.total_trades = 0
@@ -132,6 +150,7 @@ class ScalpingBot:
         print("\n" + "="*60)
         print("🤖 BOT DE SCALPING - CONFIGURACIÓN")
         print("="*60)
+        print(f"Modo de operación: {self.operation_mode.upper()}")
         print(f"Símbolo: {self.symbol}")
         print(f"Mercado: {'FUTURES' if self.use_futures else 'SPOT'}")
         
@@ -191,20 +210,102 @@ class ScalpingBot:
         
         return dynamic_size
     
+    def _check_existing_positions(self):
+        """
+        Verifica si hay posiciones abiertas al iniciar el bot
+        """
+        if not self.use_futures:
+            return
+        
+        print("🔍 Verificando posiciones abiertas...")
+        position = utils.get_open_positions(self.exchange, self.symbol)
+        
+        if position:
+            self.in_position = True
+            self.entry_price = position['entryPrice']
+            self.position_amount = position['contracts']
+            self.position_side = position['side']
+            
+            print(f"⚠️  POSICIÓN ABIERTA DETECTADA:")
+            print(f"   Lado: {self.position_side}")
+            print(f"   Precio de entrada: ${self.entry_price:.4f}")
+            print(f"   Cantidad: {self.position_amount}")
+            print(f"   PnL no realizado: ${position['unrealizedPnl']:.2f}")
+            print(f"\n   ℹ️  El bot esperará hasta que esta posición se cierre antes de operar.")
+        else:
+            print("✅ No hay posiciones abiertas. Listo para operar.\n")
+    
     def run(self):
         """
         Loop principal del bot
         """
-        print(f"🚀 Iniciando bot de scalping...")
+        print(f"🚀 Iniciando bot de scalping en modo {self.operation_mode.upper()}...")
         print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         
+        # Verificar posiciones abiertas
+        self._check_existing_positions()
+        
+        if self.operation_mode == 'manual':
+            if keyboard is None:
+                print("❌ Error: Módulo 'keyboard' no disponible. No se puede usar modo manual.")
+                print("   Instala con: pip install keyboard")
+                return
+            self._run_manual_mode()
+        else:
+            self._run_automatic_mode()
+    
+    def _run_manual_mode(self):
+        """
+        Ejecuta el bot en modo manual (espera entrada del usuario)
+        """
+        print("\n" + "="*60)
+        print("📋 MODO MANUAL - CONTROLES")
+        print("="*60)
+        print("Presiona '2' para abrir posición LONG (compra)")
+        print("Presiona '3' para abrir posición SHORT (venta)")
+        print("Presiona Ctrl+C para salir")
+        print("="*60 + "\n")
+        
+        try:
+            while True:
+                # Mostrar precio actual
+                current_price = utils.get_current_price(self.exchange, self.symbol)
+                if current_price:
+                    timestamp = datetime.now().strftime('%H:%M:%S')
+                    print(f"[{timestamp}] 💰 Precio actual {self.symbol}: ${current_price:.4f}", end='\r')
+                
+                # Verificar si hay posición abierta
+                if self.in_position:
+                    # Monitorear posición y verificar órdenes de cierre
+                    self._monitor_position_manual()
+                else:
+                    # Esperar entrada del usuario para abrir posición
+                    if keyboard.is_pressed('2'):
+                        self._execute_manual_buy('LONG')
+                        time.sleep(0.5)  # Evitar múltiples detecciones
+                    elif keyboard.is_pressed('3') and self.enable_short_positions:
+                        self._execute_manual_buy('SHORT')
+                        time.sleep(0.5)  # Evitar múltiples detecciones
+                
+                time.sleep(0.2)
+                
+        except KeyboardInterrupt:
+            print("\n\n⏹️  Bot detenido por el usuario")
+            if self.in_position:
+                print(f"⚠️  ADVERTENCIA: Hay una posición abierta en {self.symbol}")
+                print(f"   Precio de entrada: ${self.entry_price:.4f}")
+    
+    def _run_automatic_mode(self):
+        """
+        Ejecuta el bot en modo automático (órdenes automáticas basadas en señales)
+        """
         retry_count = 0
         max_retries = 3
         
         while True:
             try:
                 # Ejecutar ciclo de trading
-                self._trading_cycle()
+                self._trading_cycle_automatic()
                 
                 # Resetear contador de reintentos si el ciclo fue exitoso
                 retry_count = 0
@@ -240,9 +341,232 @@ class ScalpingBot:
                 print(f"⏸️  Pausando por {self.loop_interval * 2} segundos...")
                 time.sleep(self.loop_interval * 2)
     
-    def _trading_cycle(self):
+    def _execute_manual_buy(self, position_side: str):
         """
-        Ejecuta un ciclo completo de la estrategia de trading
+        Ejecuta una orden manual de compra (LONG o SHORT) con orden LIMIT
+        
+        Args:
+            position_side: 'LONG' o 'SHORT'
+        """
+        current_price = utils.get_current_price(self.exchange, self.symbol)
+        if current_price is None:
+            print("\n⚠️  No se pudo obtener el precio actual")
+            return
+        
+        side_emoji = "🟢" if position_side == 'LONG' else "🔴"
+        signal_text = "COMPRA (LONG)" if position_side == 'LONG' else "VENTA (SHORT)"
+        
+        print(f"\n{side_emoji} ORDEN MANUAL DE {signal_text}")
+        print(f"   Precio actual: ${current_price:.4f}")
+        
+        # Usar precio actual como límite
+        limit_price = current_price
+        
+        if position_side == 'LONG':
+            order = utils.create_limit_buy_order(
+                self.exchange,
+                self.symbol,
+                self.position_size,
+                limit_price,
+                self.enable_real_trading
+            )
+        else:  # SHORT
+            order = utils.create_limit_short_order(
+                self.exchange,
+                self.symbol,
+                self.position_size,
+                limit_price,
+                self.enable_real_trading
+            )
+        
+        if order:
+            self.in_position = True
+            self.entry_price = limit_price
+            self.position_side = position_side
+            self.active_order_id = order.get('id')
+            
+            # Calcular cantidad comprada
+            base_currency = self.symbol.split('/')[0]
+            self.position_amount = self.position_size / limit_price
+            
+            print(f"✅ Orden LIMIT {position_side} creada")
+            print(f"   ID de orden: {self.active_order_id}")
+            print(f"   Precio límite: ${self.entry_price:.4f}")
+            print(f"   Cantidad: {self.position_amount:.2f} {base_currency}")
+            print(f"   Margen: {self.position_size} USDT")
+            
+            if self.use_futures:
+                effective_size = self.position_size * self.leverage
+                print(f"   Control efectivo: {effective_size} USDT (apalancamiento {self.leverage}x)")
+            
+            if not self.enable_real_trading:
+                print(f"   [SIMULACIÓN - No se ejecutó orden real]")
+            
+            print(f"\n   ℹ️  Esperando que la orden se complete...")
+        else:
+            print(f"❌ No se pudo crear la orden {position_side}")
+    
+    def _monitor_position_manual(self):
+        """
+        Monitorea la posición abierta en modo manual y coloca orden de cierre automática
+        """
+        # Obtener precio actual
+        current_price = utils.get_current_price(self.exchange, self.symbol)
+        if current_price is None:
+            return
+        
+        # Verificar si la posición ya está abierta (orden de entrada ejecutada)
+        position = utils.get_open_positions(self.exchange, self.symbol)
+        
+        if position and not self.enable_real_trading:
+            # En modo simulación, simular que la posición se abrió
+            position = {
+                'contracts': self.position_amount,
+                'entryPrice': self.entry_price,
+                'unrealizedPnl': (current_price - self.entry_price) * self.position_amount if self.position_side == 'LONG'
+                                  else (self.entry_price - current_price) * self.position_amount
+            }
+        
+        if position or not self.enable_real_trading:
+            # Posición abierta - colocar orden de cierre con pequeño profit
+            if self.position_side == 'LONG':
+                # Para LONG: vender un poco más arriba
+                close_price = current_price + (current_price * 0.00002)  # +0.002% como en bot.py
+                profit_loss_percent = utils.calculate_profit_loss_percent(self.entry_price, current_price)
+            else:  # SHORT
+                # Para SHORT: comprar un poco más abajo
+                close_price = current_price - (current_price * 0.00002)  # -0.002%
+                profit_loss_percent = -utils.calculate_profit_loss_percent(self.entry_price, current_price)
+            
+            # Mostrar estado
+            position_emoji = "🟢" if self.position_side == 'LONG' else "🔴"
+            timestamp = datetime.now().strftime('%H:%M:%S')
+            
+            # Estimar profit
+            if self.use_futures:
+                profit_usd = profit_loss_percent / 100 * self.position_size * self.leverage
+            else:
+                profit_usd = profit_loss_percent / 100 * self.position_size
+            
+            print(f"\n[{timestamp}] {position_emoji} Posición {self.position_side} activa")
+            print(f"   Precio entrada: ${self.entry_price:.4f}")
+            print(f"   Precio actual: ${current_price:.4f}")
+            print(f"   P/L estimado: {profit_loss_percent:+.2f}% (${profit_usd:+.2f} USD)")
+            
+            # Colocar orden de cierre si aún no existe
+            print(f"   Colocando orden de cierre a ${close_price:.4f}...")
+            
+            if self.position_side == 'LONG':
+                close_order = utils.create_limit_sell_order(
+                    self.exchange,
+                    self.symbol,
+                    self.position_amount,
+                    close_price,
+                    self.enable_real_trading,
+                    self.position_side
+                )
+            else:  # SHORT
+                close_order = utils.create_limit_short_order(
+                    self.exchange,
+                    self.symbol,
+                    self.position_amount,
+                    close_price,
+                    self.enable_real_trading
+                )
+            
+            if close_order:
+                print(f"   ✅ Orden de cierre colocada (ID: {close_order.get('id')})")
+                
+                # Esperar a que se complete
+                print(f"   ⏳ Esperando ejecución de cierre...")
+                self._wait_for_close(close_price)
+    
+    def _wait_for_close(self, close_price: float):
+        """
+        Espera a que la orden de cierre se ejecute
+        
+        Args:
+            close_price: Precio de cierre de la orden
+        """
+        # Simular cierre en modo simulación
+        if not self.enable_real_trading:
+            print(f"\n   [SIMULACIÓN] Posición cerrada a ${close_price:.4f}")
+            self._finalize_trade(close_price)
+            return
+        
+        # En modo real, verificar el estado de la posición
+        max_wait = 60  # segundos
+        waited = 0
+        
+        while waited < max_wait:
+            position = utils.get_open_positions(self.exchange, self.symbol)
+            
+            if not position:
+                # Posición cerrada
+                print(f"\n   ✅ Posición cerrada exitosamente")
+                self._finalize_trade(close_price)
+                return
+            
+            time.sleep(1)
+            waited += 1
+        
+        print(f"\n   ⚠️  Tiempo de espera agotado. Verifica manualmente.")
+    
+    def _finalize_trade(self, close_price: float):
+        """
+        Finaliza el trade y actualiza estadísticas
+        
+        Args:
+            close_price: Precio de cierre
+        """
+        # Calcular P/L
+        if self.position_side == 'LONG':
+            profit_loss_percent = utils.calculate_profit_loss_percent(self.entry_price, close_price)
+            profit_loss_usd = (close_price - self.entry_price) * self.position_amount
+        else:  # SHORT
+            profit_loss_percent = -utils.calculate_profit_loss_percent(self.entry_price, close_price)
+            profit_loss_usd = (self.entry_price - close_price) * self.position_amount
+        
+        # Aplicar apalancamiento
+        if self.use_futures:
+            profit_loss_usd *= self.leverage
+        
+        print(f"\n📊 RESUMEN DEL TRADE:")
+        print(f"   Lado: {self.position_side}")
+        print(f"   Precio de entrada: ${self.entry_price:.4f}")
+        print(f"   Precio de salida: ${close_price:.4f}")
+        print(f"   Cantidad: {self.position_amount:.2f}")
+        
+        if profit_loss_percent >= 0:
+            print(f"   💰 Profit realizado: +{profit_loss_percent:.2f}% (+${profit_loss_usd:.2f} USD)")
+            self.winning_trades += 1
+        else:
+            print(f"   💸 Pérdida: {profit_loss_percent:.2f}% (${profit_loss_usd:.2f} USD)")
+            self.losing_trades += 1
+        
+        # Actualizar estadísticas
+        self.total_trades += 1
+        self.total_profit_usd += profit_loss_usd
+        
+        # Mostrar estadísticas acumuladas
+        win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
+        print(f"\n📈 ESTADÍSTICAS ACUMULADAS:")
+        print(f"   Total trades: {self.total_trades}")
+        print(f"   Ganadores: {self.winning_trades} | Perdedores: {self.losing_trades}")
+        print(f"   Win rate: {win_rate:.1f}%")
+        print(f"   P/L Total: ${self.total_profit_usd:.2f} USD\n")
+        
+        # Resetear estado
+        self.in_position = False
+        self.entry_price = 0.0
+        self.position_amount = 0.0
+        self.position_side = None
+        self.active_order_id = None
+        self.last_close_time = datetime.now()
+    
+    def _trading_cycle_automatic(self):
+        """
+        Ejecuta un ciclo completo de la estrategia de trading en modo automático
         """
         # Obtener precio actual
         current_price = utils.get_current_price(self.exchange, self.symbol)
@@ -367,7 +691,7 @@ class ScalpingBot:
     
     def _execute_buy(self, current_price: float, position_side: str):
         """
-        Ejecuta una orden de compra (LONG o SHORT)
+        Ejecuta una orden de compra (LONG o SHORT) con orden LIMIT en modo automático
         
         Args:
             current_price: Precio actual del activo
@@ -380,7 +704,7 @@ class ScalpingBot:
         position_size_usdt = self._get_position_size()
         
         print(f"\n{side_emoji} SEÑAL DE {signal_text} DETECTADA")
-        print(f"   Precio: ${current_price:.2f}")
+        print(f"   Precio actual: ${current_price:.4f}")
         
         if self.use_dynamic_position_size:
             available_balance = utils.get_futures_available_balance(self.exchange, 'USDT') if self.use_futures else utils.get_balance(self.exchange, 'USDT')
@@ -388,34 +712,41 @@ class ScalpingBot:
                 print(f"   💰 Balance disponible: ${available_balance:.2f} USDT")
                 print(f"   📊 Tamaño de posición: ${position_size_usdt:.2f} USDT ({self.position_size_percent}% del balance)")
         
+        # Usar precio actual como límite
+        limit_price = current_price
+        
         if position_side == 'LONG':
-            order = utils.create_market_buy_order(
+            order = utils.create_limit_buy_order(
                 self.exchange,
                 self.symbol,
                 position_size_usdt,
-                self.enable_real_trading,
-                self.use_futures
+                limit_price,
+                self.enable_real_trading
             )
         else:  # SHORT
-            order = utils.create_short_order(
+            order = utils.create_limit_short_order(
                 self.exchange,
                 self.symbol,
                 position_size_usdt,
+                limit_price,
                 self.enable_real_trading
             )
         
         if order:
             self.in_position = True
-            self.entry_price = current_price
+            self.entry_price = limit_price
             self.position_side = position_side
+            self.active_order_id = order.get('id')
             
-            # Calcular cantidad comprada (aproximada en modo simulación)
+            # Calcular cantidad comprada
             base_currency = self.symbol.split('/')[0]
-            self.position_amount = position_size_usdt / current_price
+            self.position_amount = position_size_usdt / limit_price
             
-            print(f"✅ Orden {position_side} ejecutada")
-            print(f"   Precio de entrada: ${self.entry_price:.2f}")
-            print(f"   Cantidad: {self.position_amount:.6f} {base_currency}")
+            print(f"✅ Orden LIMIT {position_side} creada")
+            print(f"   Estado: Pendiente de ejecución")
+            print(f"   ID de orden: {self.active_order_id}")
+            print(f"   Precio límite: ${self.entry_price:.4f}")
+            print(f"   Cantidad: {self.position_amount:.2f} {base_currency}")
             print(f"   Margen: {position_size_usdt:.2f} USDT")
             
             if self.use_futures:
@@ -424,16 +755,12 @@ class ScalpingBot:
             
             if not self.enable_real_trading:
                 print(f"   [SIMULACIÓN - No se ejecutó orden real]")
-            
-            # Colocar stop-limit si está habilitado y es trading real en Futures
-            if self.use_stop_limit and self.enable_real_trading and self.use_futures:
-                self._place_stop_limit_order()
         else:
             print(f"❌ No se pudo ejecutar la orden {position_side}")
     
     def _execute_sell(self, current_price: float, reason: str):
         """
-        Ejecuta una orden de cierre de posición
+        Ejecuta una orden de cierre de posición con orden LIMIT
         
         Args:
             current_price: Precio actual del activo
@@ -442,58 +769,63 @@ class ScalpingBot:
         side_emoji = "🟢" if self.position_side == 'LONG' else "🔴"
         print(f"\n{side_emoji} SEÑAL DE CIERRE {self.position_side} DETECTADA")
         print(f"   Razón: {reason}")
+        print(f"   Precio actual: ${current_price:.4f}")
         
-        # Cancelar stop-limits pendientes si están habilitados
-        if self.use_stop_limit and self.enable_real_trading and self.use_futures:
-            print(f"   🛡 Cancelando stop-limits pendientes...")
-            utils.cancel_all_stop_orders(self.exchange, self.symbol)
+        # Calcular precio límite para cierre (con pequeño offset como en bot.py)
+        if self.position_side == 'LONG':
+            # Para LONG: vender un poco más arriba
+            limit_price = current_price + (current_price * 0.00002)  # +0.002%
+        else:  # SHORT
+            # Para SHORT: comprar un poco más abajo
+            limit_price = current_price - (current_price * 0.00002)  # -0.002%
         
         if self.position_side == 'LONG':
-            order = utils.create_market_sell_order(
+            order = utils.create_limit_sell_order(
                 self.exchange,
                 self.symbol,
                 self.position_amount,
+                limit_price,
                 self.enable_real_trading,
-                self.use_futures,
                 self.position_side
             )
         else:  # SHORT
-            order = utils.close_short_order(
+            order = utils.close_limit_short_order(
                 self.exchange,
                 self.symbol,
                 self.position_amount,
+                limit_price,
                 self.enable_real_trading
             )
         
         if order:
-            # Calcular P/L
+            # Calcular P/L estimado
             if self.position_side == 'LONG':
                 profit_loss_percent = utils.calculate_profit_loss_percent(
                     self.entry_price,
-                    current_price
+                    limit_price
                 )
-                profit_loss_usd = (current_price - self.entry_price) * self.position_amount
+                profit_loss_usd = (limit_price - self.entry_price) * self.position_amount
             else:  # SHORT
                 profit_loss_percent = -utils.calculate_profit_loss_percent(
                     self.entry_price,
-                    current_price
+                    limit_price
                 )
-                profit_loss_usd = (self.entry_price - current_price) * self.position_amount
+                profit_loss_usd = (self.entry_price - limit_price) * self.position_amount
             
             # Aplicar apalancamiento al cálculo de ganancias en Futures
             if self.use_futures:
                 profit_loss_usd *= self.leverage
             
-            print(f"✅ Posición {self.position_side} cerrada")
-            print(f"   Precio de entrada: ${self.entry_price:.2f}")
-            print(f"   Precio de salida: ${current_price:.2f}")
-            print(f"   Cantidad: {self.position_amount:.6f}")
+            print(f"✅ Orden de cierre LIMIT colocada")
+            print(f"   Estado: Pendiente de ejecución")
+            print(f"   Precio límite: ${limit_price:.4f}")
+            print(f"   Cantidad: {self.position_amount:.2f}")
             
             if profit_loss_percent >= 0:
-                print(f"   💰 Ganancia: +{profit_loss_percent:.2f}% (+${profit_loss_usd:.2f})")
+                print(f"   💰 Profit estimado: +{profit_loss_percent:.2f}% (+${profit_loss_usd:.2f} USD)")
                 self.winning_trades += 1
             else:
-                print(f"   💸 Pérdida: {profit_loss_percent:.2f}% (${profit_loss_usd:.2f})")
+                print(f"   💸 Pérdida estimada: {profit_loss_percent:.2f}% (${profit_loss_usd:.2f} USD)")
                 self.losing_trades += 1
             
             # Actualizar estadísticas
@@ -516,6 +848,7 @@ class ScalpingBot:
             self.entry_price = 0.0
             self.position_amount = 0.0
             self.position_side = None
+            self.active_order_id = None
             self.last_close_time = datetime.now()
             
             print(f"\n   ⏳ Cooldown activado: {self.cooldown_seconds}s antes de nueva posición")
@@ -528,7 +861,7 @@ def main():
     Función principal para iniciar el bot
     """
     # Verificar que las credenciales estén configuradas
-    if config.API_KEY == 'your api key' or config.API_SECRET == 'your api secret':
+    if config.API_KEY == 'your api key' or config.API_SECRET == 'your api secret' or not config.API_KEY:
         print("❌ ERROR: Configura tus credenciales de API en config.py")
         print("   Para obtener credenciales: https://www.binance.com/en/my/settings/api-management")
         
@@ -537,6 +870,30 @@ def main():
             print("   https://testnet.binance.vision/")
         
         return
+    
+    # Menú de selección de modo
+    print("\n" + "="*60)
+    print("🤖 BOT DE SCALPING BINANCE FUTURES")
+    print("="*60)
+    print("\nSelecciona el modo de operación:")
+    print("1. Operación MANUAL (espera entrada del usuario)")
+    print("2. Operación AUTOMÁTICA (ejecuta órdenes automáticamente)")
+    print("="*60)
+    
+    while True:
+        try:
+            choice = input("\nIngresa tu opción (1 o 2): ").strip()
+            if choice == '1':
+                operation_mode = 'manual'
+                break
+            elif choice == '2':
+                operation_mode = 'automatic'
+                break
+            else:
+                print("⚠️  Opción inválida. Ingresa 1 o 2.")
+        except KeyboardInterrupt:
+            print("\n❌ Operación cancelada por el usuario")
+            return
     
     # Advertencia si el trading real está activado
     if config.ENABLE_REAL_TRADING:
@@ -552,8 +909,8 @@ def main():
             print("❌ Operación cancelada por el usuario")
             return
     
-    # Crear e iniciar el bot
-    bot = ScalpingBot()
+    # Crear e iniciar el bot con el modo seleccionado
+    bot = ScalpingBot(operation_mode=operation_mode)
     bot.run()
 
 
