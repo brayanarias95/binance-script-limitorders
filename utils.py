@@ -121,6 +121,40 @@ def calculate_profit_loss_percent(entry_price: float, current_price: float) -> f
     return ((current_price - entry_price) / entry_price) * 100
 
 
+def calculate_take_profit_price_for_fixed_usd(entry_price: float, position_size_usdt: float,
+                                               target_profit_usd: float, leverage: int = 1,
+                                               position_side: str = 'LONG') -> float:
+    """
+    Calcula el precio de take profit necesario para obtener una ganancia fija en USD
+    
+    Args:
+        entry_price: Precio de entrada de la posición
+        position_size_usdt: Tamaño de la posición en USDT (sin apalancamiento)
+        target_profit_usd: Ganancia objetivo en USD (ej: 2.0 para 2 USDT)
+        leverage: Apalancamiento usado (default: 1 para spot)
+        position_side: 'LONG' o 'SHORT'
+        
+    Returns:
+        Precio objetivo para obtener el profit deseado
+    """
+    # Calcular cantidad de activo comprado/vendido
+    amount = position_size_usdt / entry_price
+    
+    # Calcular el cambio de precio necesario para obtener el profit deseado
+    # Profit = (price_change * amount) * leverage
+    # price_change = profit / (amount * leverage)
+    price_change_needed = target_profit_usd / (amount * leverage)
+    
+    if position_side == 'LONG':
+        # Para LONG, necesitamos que el precio suba
+        take_profit_price = entry_price + price_change_needed
+    else:  # SHORT
+        # Para SHORT, necesitamos que el precio baje
+        take_profit_price = entry_price - price_change_needed
+    
+    return take_profit_price
+
+
 def should_sell(entry_price: float, current_price: float, take_profit_percent: float, 
                 stop_loss_percent: float, position_side: str = 'LONG') -> tuple[bool, str]:
     """
@@ -465,6 +499,25 @@ def get_balance(exchange: ccxt.Exchange, currency: str) -> Optional[float]:
         return balance['free'].get(currency, 0.0)
     except Exception as e:
         print(f"Error obteniendo balance: {e}")
+        return None
+
+
+def get_futures_available_balance(exchange: ccxt.Exchange, currency: str) -> Optional[float]:
+    """
+    Obtiene el balance disponible en Futures para una moneda
+    
+    Args:
+        exchange: Instancia del exchange de CCXT
+        currency: Moneda (ej: 'USDT', 'BTC')
+        
+    Returns:
+        Balance disponible en Futures o None si hay error
+    """
+    try:
+        balance = exchange.fetch_balance()
+        return balance['free'].get(currency, 0.0)
+    except Exception as e:
+        print(f"Error obteniendo balance de Futures: {e}")
         return None
 
 

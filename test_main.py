@@ -11,6 +11,58 @@ import main
 class TestLimitOrders(unittest.TestCase):
     """Tests para las órdenes limit"""
     
+    def test_calculate_take_profit_price_for_fixed_usd_long(self):
+        """Test: Calcular precio de take profit para LONG con ganancia fija en USD"""
+        entry_price = 0.08
+        position_size_usdt = 10.0
+        target_profit_usd = 2.0
+        leverage = 10
+        
+        take_profit_price = utils.calculate_take_profit_price_for_fixed_usd(
+            entry_price=entry_price,
+            position_size_usdt=position_size_usdt,
+            target_profit_usd=target_profit_usd,
+            leverage=leverage,
+            position_side='LONG'
+        )
+        
+        # Verificar que el precio es mayor que el de entrada (LONG)
+        self.assertGreater(take_profit_price, entry_price)
+        
+        # Calcular ganancia esperada
+        amount = position_size_usdt / entry_price  # 10 / 0.08 = 125
+        price_change = take_profit_price - entry_price
+        profit = price_change * amount * leverage
+        
+        # La ganancia debe ser aproximadamente 2 USDT
+        self.assertAlmostEqual(profit, target_profit_usd, places=6)
+    
+    def test_calculate_take_profit_price_for_fixed_usd_short(self):
+        """Test: Calcular precio de take profit para SHORT con ganancia fija en USD"""
+        entry_price = 0.08
+        position_size_usdt = 10.0
+        target_profit_usd = 2.0
+        leverage = 10
+        
+        take_profit_price = utils.calculate_take_profit_price_for_fixed_usd(
+            entry_price=entry_price,
+            position_size_usdt=position_size_usdt,
+            target_profit_usd=target_profit_usd,
+            leverage=leverage,
+            position_side='SHORT'
+        )
+        
+        # Verificar que el precio es menor que el de entrada (SHORT)
+        self.assertLess(take_profit_price, entry_price)
+        
+        # Calcular ganancia esperada
+        amount = position_size_usdt / entry_price  # 10 / 0.08 = 125
+        price_change = entry_price - take_profit_price  # Para SHORT, ganamos cuando baja
+        profit = price_change * amount * leverage
+        
+        # La ganancia debe ser aproximadamente 2 USDT
+        self.assertAlmostEqual(profit, target_profit_usd, places=6)
+    
     def test_create_limit_buy_order_simulated(self):
         """Test: Crear orden limit de compra en modo simulación"""
         mock_exchange = Mock()
@@ -152,16 +204,17 @@ class TestBotModes(unittest.TestCase):
         mock_config.POSITION_SIZE_USDT = 5
         mock_config.TAKE_PROFIT_PERCENT = 0.6
         mock_config.STOP_LOSS_PERCENT = 0.4
+        mock_config.TARGET_PROFIT_USDT = 2.0
         mock_config.LOOP_INTERVAL = 3
         mock_config.ENABLE_REAL_TRADING = False
         mock_config.COOLDOWN_SECONDS = 60
         mock_config.ENABLE_SHORT_POSITIONS = True
-        mock_config.USE_STOP_LIMIT = True
-        mock_config.STOP_LIMIT_OFFSET_PERCENT = 0.1
         mock_config.USE_FUTURES = True
         mock_config.LEVERAGE = 10
         mock_config.MARGIN_MODE = 'isolated'
         mock_config.USE_SANDBOX = False
+        mock_config.USE_DYNAMIC_POSITION_SIZE = False
+        mock_config.POSITION_SIZE_PERCENT = 10
         
         # Mock exchange
         mock_exchange = Mock()
@@ -189,16 +242,17 @@ class TestBotModes(unittest.TestCase):
         mock_config.POSITION_SIZE_USDT = 5
         mock_config.TAKE_PROFIT_PERCENT = 0.6
         mock_config.STOP_LOSS_PERCENT = 0.4
+        mock_config.TARGET_PROFIT_USDT = 2.0
         mock_config.LOOP_INTERVAL = 3
         mock_config.ENABLE_REAL_TRADING = False
         mock_config.COOLDOWN_SECONDS = 60
         mock_config.ENABLE_SHORT_POSITIONS = True
-        mock_config.USE_STOP_LIMIT = True
-        mock_config.STOP_LIMIT_OFFSET_PERCENT = 0.1
         mock_config.USE_FUTURES = True
         mock_config.LEVERAGE = 10
         mock_config.MARGIN_MODE = 'isolated'
         mock_config.USE_SANDBOX = False
+        mock_config.USE_DYNAMIC_POSITION_SIZE = False
+        mock_config.POSITION_SIZE_PERCENT = 10
         
         # Mock exchange
         mock_exchange = Mock()

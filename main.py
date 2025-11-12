@@ -45,14 +45,11 @@ class ScalpingBot:
         self.position_size_percent = config.POSITION_SIZE_PERCENT
         self.take_profit = config.TAKE_PROFIT_PERCENT
         self.stop_loss = config.STOP_LOSS_PERCENT
+        self.target_profit_usdt = config.TARGET_PROFIT_USDT
         self.loop_interval = config.LOOP_INTERVAL
         self.enable_real_trading = config.ENABLE_REAL_TRADING
         self.cooldown_seconds = config.COOLDOWN_SECONDS
         self.enable_short_positions = config.ENABLE_SHORT_POSITIONS
-        
-        # Stop-Limit configuration
-        self.use_stop_limit = config.USE_STOP_LIMIT
-        self.stop_limit_offset_percent = config.STOP_LIMIT_OFFSET_PERCENT
         
         # Configuración de Futures
         self.use_futures = config.USE_FUTURES
@@ -67,6 +64,8 @@ class ScalpingBot:
         self.entry_price = 0.0
         self.position_amount = 0.0
         self.position_side = None  # 'LONG' o 'SHORT'
+        self.take_profit_price = 0.0  # Precio de take profit calculado para 2 USDT
+        self.position_size_used = 0.0  # Tamaño de posición usado (USDT)
         self.last_close_time = None  # Timestamp de última posición cerrada
         self.active_order_id = None  # ID de la orden activa
         
@@ -170,7 +169,7 @@ class ScalpingBot:
         if self.use_futures and not self.use_dynamic_position_size:
             print(f"Control efectivo: {self.position_size * self.leverage} USDT (con {self.leverage}x)")
         
-        print(f"Take Profit: +{self.take_profit}%")
+        print(f"Target Profit: ${self.target_profit_usdt:.2f} USDT por operación")
         print(f"Stop Loss: -{self.stop_loss}%")
         print(f"Intervalo de loop: {self.loop_interval} segundos")
         print(f"Cooldown: {self.cooldown_seconds} segundos")
@@ -206,6 +205,35 @@ class ScalpingBot:
             print(f"\n   ℹ️  El bot esperará hasta que esta posición se cierre antes de operar.")
         else:
             print("✅ No hay posiciones abiertas. Listo para operar.\n")
+    
+    def _get_position_size(self) -> float:
+        """
+        Obtiene el tamaño de posición a usar (dinámico o estático)
+        
+        Returns:
+            Tamaño de posición en USDT
+        """
+        if self.use_dynamic_position_size:
+            # Obtener balance disponible
+            if self.use_futures:
+                available_balance = utils.get_futures_available_balance(self.exchange, 'USDT')
+            else:
+                available_balance = utils.get_balance(self.exchange, 'USDT')
+            
+            if available_balance is None or available_balance <= 0:
+                print(f"⚠️  No se pudo obtener balance disponible. Usando tamaño fijo: {self.position_size} USDT")
+                return self.position_size
+            
+            # Calcular tamaño basado en porcentaje
+            position_size = available_balance * (self.position_size_percent / 100)
+            
+            # Asegurar mínimo de 5 USDT
+            position_size = max(position_size, 5.0)
+            
+            return position_size
+        else:
+            # Usar tamaño fijo
+            return self.position_size
     
     def run(self):
         """
@@ -356,14 +384,25 @@ class ScalpingBot:
             self.entry_price = limit_price
             self.position_side = position_side
             self.active_order_id = order.get('id')
+            self.position_size_used = self.position_size
             
             # Calcular cantidad comprada
             base_currency = self.symbol.split('/')[0]
             self.position_amount = self.position_size / limit_price
             
+            # Calcular precio de take profit para obtener 2 USDT
+            self.take_profit_price = utils.calculate_take_profit_price_for_fixed_usd(
+                entry_price=self.entry_price,
+                position_size_usdt=self.position_size,
+                target_profit_usd=self.target_profit_usdt,
+                leverage=self.leverage if self.use_futures else 1,
+                position_side=self.position_side
+            )
+            
             print(f"✅ Orden LIMIT {position_side} creada")
             print(f"   ID de orden: {self.active_order_id}")
             print(f"   Precio límite: ${self.entry_price:.4f}")
+            print(f"   Precio Take Profit: ${self.take_profit_price:.4f} (para ${self.target_profit_usdt:.2f} USDT profit)")
             print(f"   Cantidad: {self.position_amount:.2f} {base_currency}")
             print(f"   Margen: {self.position_size} USDT")
             
@@ -400,14 +439,12 @@ class ScalpingBot:
             }
         
         if position or not self.enable_real_trading:
-            # Posición abierta - colocar orden de cierre con pequeño profit
+            # Posición abierta - colocar orden de cierre al precio de take profit calculado
+            close_price = self.take_profit_price
+            
             if self.position_side == 'LONG':
-                # Para LONG: vender un poco más arriba
-                close_price = current_price + (current_price * 0.00002)  # +0.002% como en bot.py
                 profit_loss_percent = utils.calculate_profit_loss_percent(self.entry_price, current_price)
             else:  # SHORT
-                # Para SHORT: comprar un poco más abajo
-                close_price = current_price - (current_price * 0.00002)  # -0.002%
                 profit_loss_percent = -utils.calculate_profit_loss_percent(self.entry_price, current_price)
             
             # Mostrar estado
@@ -533,6 +570,8 @@ class ScalpingBot:
         self.entry_price = 0.0
         self.position_amount = 0.0
         self.position_side = None
+        self.take_profit_price = 0.0
+        self.position_size_used = 0.0
         self.active_order_id = None
         self.last_close_time = datetime.now()
     
@@ -619,48 +658,6 @@ class ScalpingBot:
             if should_exit:
                 self._execute_sell(current_price, reason)
     
-    def _place_stop_limit_order(self):
-        """
-        Coloca una orden stop-limit para proteger la posición actual
-        """
-        if not self.in_position or self.position_side is None:
-            return
-        
-        # Calcular precio de stop (trigger) basado en el stop loss configurado
-        if self.position_side == 'LONG':
-            # Para LONG: stop loss es cuando el precio cae
-            trigger_price = self.entry_price * (1 - self.stop_loss / 100)
-            # Limit price es ligeramente por debajo del trigger
-            limit_price = trigger_price * (1 - self.stop_limit_offset_percent / 100)
-            # Para cerrar LONG, necesitamos SELL
-            order_side = 'sell'
-        else:  # SHORT
-            # Para SHORT: stop loss es cuando el precio sube
-            trigger_price = self.entry_price * (1 + self.stop_loss / 100)
-            # Limit price es ligeramente por encima del trigger
-            limit_price = trigger_price * (1 + self.stop_limit_offset_percent / 100)
-            # Para cerrar SHORT, necesitamos BUY
-            order_side = 'buy'
-        
-        # Crear la orden stop-limit
-        stop_order = utils.create_stop_limit_order(
-            self.exchange,
-            self.symbol,
-            order_side,
-            self.position_amount,
-            trigger_price,
-            limit_price,
-            reduce_only=True
-        )
-        
-        if stop_order:
-            print(f"   🛡 Stop-Limit colocado:")
-            print(f"      Trigger: ${trigger_price:.4f}")
-            print(f"      Limit: ${limit_price:.4f}")
-            print(f"      Lado: {order_side.upper()}")
-        else:
-            print(f"   ⚠️ No se pudo colocar el stop-limit")
-    
     def _execute_buy(self, current_price: float, position_side: str):
         """
         Ejecuta una orden de compra (LONG o SHORT) con orden LIMIT en modo automático
@@ -692,7 +689,6 @@ class ScalpingBot:
                 self.exchange,
                 self.symbol,
                 position_size_usdt,
-                self.position_size,
                 limit_price,
                 self.enable_real_trading
             )
@@ -701,7 +697,6 @@ class ScalpingBot:
                 self.exchange,
                 self.symbol,
                 position_size_usdt,
-                self.position_size,
                 limit_price,
                 self.enable_real_trading
             )
@@ -711,19 +706,28 @@ class ScalpingBot:
             self.entry_price = limit_price
             self.position_side = position_side
             self.active_order_id = order.get('id')
+            self.position_size_used = position_size_usdt
             
             # Calcular cantidad comprada
             base_currency = self.symbol.split('/')[0]
             self.position_amount = position_size_usdt / limit_price
-            self.position_amount = self.position_size / limit_price
+            
+            # Calcular precio de take profit para obtener 2 USDT
+            self.take_profit_price = utils.calculate_take_profit_price_for_fixed_usd(
+                entry_price=self.entry_price,
+                position_size_usdt=position_size_usdt,
+                target_profit_usd=self.target_profit_usdt,
+                leverage=self.leverage if self.use_futures else 1,
+                position_side=self.position_side
+            )
             
             print(f"✅ Orden LIMIT {position_side} creada")
             print(f"   Estado: Pendiente de ejecución")
             print(f"   ID de orden: {self.active_order_id}")
             print(f"   Precio límite: ${self.entry_price:.4f}")
+            print(f"   Precio Take Profit: ${self.take_profit_price:.4f} (para ${self.target_profit_usdt:.2f} USDT profit)")
             print(f"   Cantidad: {self.position_amount:.2f} {base_currency}")
             print(f"   Margen: {position_size_usdt:.2f} USDT")
-            print(f"   Margen: {self.position_size} USDT")
             
             if self.use_futures:
                 effective_size = position_size_usdt * self.leverage
@@ -747,13 +751,8 @@ class ScalpingBot:
         print(f"   Razón: {reason}")
         print(f"   Precio actual: ${current_price:.4f}")
         
-        # Calcular precio límite para cierre (con pequeño offset como en bot.py)
-        if self.position_side == 'LONG':
-            # Para LONG: vender un poco más arriba
-            limit_price = current_price + (current_price * 0.00002)  # +0.002%
-        else:  # SHORT
-            # Para SHORT: comprar un poco más abajo
-            limit_price = current_price - (current_price * 0.00002)  # -0.002%
+        # Usar el precio de take profit calculado previamente
+        limit_price = self.take_profit_price
         
         if self.position_side == 'LONG':
             order = utils.create_limit_sell_order(
@@ -824,6 +823,8 @@ class ScalpingBot:
             self.entry_price = 0.0
             self.position_amount = 0.0
             self.position_side = None
+            self.take_profit_price = 0.0
+            self.position_size_used = 0.0
             self.active_order_id = None
             self.last_close_time = datetime.now()
             

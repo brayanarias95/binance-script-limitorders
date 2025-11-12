@@ -16,6 +16,41 @@ binance_client = Client(user_key, secret_key)
 apalancamiento=50
 binance_client.futures_change_leverage(symbol="1000SHIBUSDT", leverage=apalancamiento)
 
+# Target profit en USDT
+TARGET_PROFIT_USDT = 2.0
+
+
+def calculate_take_profit_price(entry_price, position_size_usdt, target_profit_usd, leverage, position_side='LONG'):
+    """
+    Calcula el precio de take profit necesario para obtener una ganancia fija en USD
+    
+    Args:
+        entry_price: Precio de entrada de la posición
+        position_size_usdt: Tamaño de la posición en USDT (sin apalancamiento)
+        target_profit_usd: Ganancia objetivo en USD (ej: 2.0 para 2 USDT)
+        leverage: Apalancamiento usado
+        position_side: 'LONG' o 'SHORT'
+        
+    Returns:
+        Precio objetivo para obtener el profit deseado
+    """
+    # Calcular cantidad de activo comprado/vendido
+    amount = position_size_usdt / entry_price
+    
+    # Calcular el cambio de precio necesario para obtener el profit deseado
+    # Profit = (price_change * amount) * leverage
+    # price_change = profit / (amount * leverage)
+    price_change_needed = target_profit_usd / (amount * leverage)
+    
+    if position_side == 'LONG':
+        # Para LONG, necesitamos que el precio suba
+        take_profit_price = entry_price + price_change_needed
+    else:  # SHORT
+        # Para SHORT, necesitamos que el precio baje
+        take_profit_price = entry_price - price_change_needed
+    
+    return take_profit_price
+
 
 def create_order_with_retry(symbol, side, precio, cantidad_inicial, apalancamiento):
     """
@@ -135,8 +170,25 @@ while True:
                 saldo=float(x['balance'])
         print(saldo)
         precio=float(precioshib['price'])
-        cantidadshiba=int((saldo/precio)*0.98)*apalancamiento
+        
+        # Calcular position size en USDT (el margen usado, sin apalancamiento)
+        position_size_usdt = saldo * 0.98  # Usar 98% del balance disponible
+        
+        cantidadshiba=int((position_size_usdt/precio))*apalancamiento
         print(f"Cantidad inicial calculada: {cantidadshiba}")
+        print(f"Position size (margen): {position_size_usdt:.2f} USDT")
+        
+        # Calcular precio de take profit para obtener 2 USDT
+        take_profit_price = calculate_take_profit_price(
+            entry_price=precio,
+            position_size_usdt=position_size_usdt,
+            target_profit_usd=TARGET_PROFIT_USDT,
+            leverage=apalancamiento,
+            position_side='LONG'
+        )
+        
+        print(f"Precio de entrada: {precio:.8f}")
+        print(f"Precio de Take Profit: {take_profit_price:.8f} (para ${TARGET_PROFIT_USDT:.2f} USDT profit)")
         
         #orden de comprar
         orden_result = create_order_with_retry(
@@ -173,11 +225,14 @@ while True:
                         cantidad=int(cantidad)*(-1)
                 else:
                     cantidad=int(cantidad)
+                
+                # Usar el precio de take profit calculado
+                print(f"Colocando orden de venta LIMIT a {take_profit_price:.8f} para profit de ${TARGET_PROFIT_USDT:.2f} USDT")
                 binance_client.futures_create_order(
                 symbol='1000SHIBUSDT',
                 type='LIMIT',
                 timeInForce='GTC',
-                price=precio+0.00002,
+                price=take_profit_price,
                 side='SELL',
                 quantity=cantidad
                 )
@@ -197,8 +252,25 @@ while True:
                 saldo=float(x['balance'])
         print(saldo)
         precio=float(precioshib['price'])
-        cantidadshiba=int((saldo/precio)*0.98)*apalancamiento
+        
+        # Calcular position size en USDT (el margen usado, sin apalancamiento)
+        position_size_usdt = saldo * 0.98  # Usar 98% del balance disponible
+        
+        cantidadshiba=int((position_size_usdt/precio))*apalancamiento
         print(f"Cantidad inicial calculada: {cantidadshiba}")
+        print(f"Position size (margen): {position_size_usdt:.2f} USDT")
+        
+        # Calcular precio de take profit para obtener 2 USDT en SHORT
+        take_profit_price = calculate_take_profit_price(
+            entry_price=precio,
+            position_size_usdt=position_size_usdt,
+            target_profit_usd=TARGET_PROFIT_USDT,
+            leverage=apalancamiento,
+            position_side='SHORT'
+        )
+        
+        print(f"Precio de entrada: {precio:.8f}")
+        print(f"Precio de Take Profit: {take_profit_price:.8f} (para ${TARGET_PROFIT_USDT:.2f} USDT profit)")
         
         #orden de vender
         orden_result = create_order_with_retry(
@@ -234,11 +306,14 @@ while True:
                         cantidad=int(cantidad)*(-1)
                 else:
                     cantidad=int(cantidad)
+                
+                # Usar el precio de take profit calculado para SHORT
+                print(f"Colocando orden de compra LIMIT a {take_profit_price:.8f} para profit de ${TARGET_PROFIT_USDT:.2f} USDT")
                 binance_client.futures_create_order(
                 symbol='1000SHIBUSDT',
                 type='LIMIT',
                 timeInForce='GTC',
-                price=precio-0.00002,
+                price=take_profit_price,
                 side='BUY',
                 quantity=cantidad
                 )

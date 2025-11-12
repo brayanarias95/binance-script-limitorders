@@ -5,14 +5,17 @@ Bot de trading automatizado tipo scalping para Binance usando Python y CCXT.
 ## 🚀 Características
 
 - **Estrategia EMA**: Compra cuando el precio cruza por encima de la EMA de 12 periodos
-- **Gestión de riesgo**: Take Profit (+0.6%) y Stop Loss (-0.4%) configurables
-- **Tamaño de posición dinámico**: 🆕 El bot consulta automáticamente el balance disponible y ajusta el tamaño de cada operación según el porcentaje configurado
+- **Profit Fijo de 2 USDT**: 🆕 El bot calcula automáticamente el precio de take profit necesario para obtener exactamente 2 USDT de ganancia en cada operación
+- **Órdenes LIMIT**: Todas las operaciones usan órdenes limit para mejor control de precios
+- **Gestión de riesgo**: Stop Loss (-0.4%) configurable para limitar pérdidas
+- **Tamaño de posición dinámico**: El bot consulta automáticamente el balance disponible y ajusta el tamaño de cada operación según el porcentaje configurado
 - **Futures Trading**: Soporte para Binance Futures con apalancamiento configurable
 - **Posiciones LONG y SHORT**: Aprovecha movimientos alcistas y bajistas
 - **Modo Sandbox**: Opera en modo paper trading por defecto (sin dinero real)
 - **Timeframe**: Velas de 1 minuto
-- **Logs detallados**: Muestra precio actual, EMA, balance disponible y P/L en tiempo real
+- **Logs detallados**: Muestra precio actual, EMA, balance disponible, take profit calculado y P/L en tiempo real
 - **Manejo de errores**: Reintentos automáticos en caso de errores de conexión
+- **Prevención de duplicados**: Verifica posiciones abiertas y espera a que se cierren antes de abrir nuevas
 
 ## 📋 Requisitos
 
@@ -69,10 +72,10 @@ Todas las opciones configurables están en `config.py`:
 - `SYMBOL`: Par de trading (default: 'DOGE/USDT')
 - `TIMEFRAME`: Timeframe de las velas (default: '1m')
 - `EMA_PERIOD`: Periodo de la EMA (default: 12)
-- `TAKE_PROFIT_PERCENT`: Take profit en % (default: 0.6)
+- `TARGET_PROFIT_USDT`: 🆕 Ganancia objetivo fija por operación en USDT (default: 2.0)
 - `STOP_LOSS_PERCENT`: Stop loss en % (default: 0.4)
 
-### Position Sizing (NEW! 🎉)
+### Position Sizing
 - `USE_DYNAMIC_POSITION_SIZE`: Usar tamaño dinámico basado en balance (default: True)
 - `POSITION_SIZE_PERCENT`: Porcentaje del balance a usar por operación (default: 10%)
 - `POSITION_SIZE_USDT`: Tamaño fijo en USDT (usado solo si dynamic está deshabilitado, default: 5)
@@ -93,6 +96,52 @@ Todas las opciones configurables están en `config.py`:
 - `COOLDOWN_SECONDS`: Espera después de cerrar posición (default: 60)
 - `ENABLE_REAL_TRADING`: Activar trading real (default: True)
 - `USE_SANDBOX`: Usar modo testnet (default: False)
+
+## 💰 Ganancia Fija de 2 USDT por Operación
+
+El bot ahora calcula automáticamente el precio de take profit necesario para obtener **exactamente 2 USDT de ganancia** en cada operación, independientemente del precio del activo o el tamaño de la posición.
+
+### ¿Cómo funciona?
+
+1. Cuando abres una posición (LONG o SHORT), el bot calcula:
+   - Cantidad de activo comprado/vendido = Margen / Precio de entrada
+   - Cambio de precio necesario = 2 USDT / (Cantidad × Apalancamiento)
+   - Precio de take profit = Precio de entrada ± Cambio necesario
+
+2. El bot coloca automáticamente una orden LIMIT de cierre al precio calculado
+
+3. Cuando el precio alcanza el take profit, la orden se ejecuta y obtienes 2 USDT de ganancia
+
+### Ejemplo Real
+
+**Escenario:** LONG en DOGE/USDT
+- Precio de entrada: $0.08
+- Margen usado: $10 USDT
+- Apalancamiento: 10x
+- Cantidad comprada: 125 DOGE (10 / 0.08)
+
+**Cálculo:**
+- Cambio de precio necesario: 2 / (125 × 10) = $0.0016
+- Precio de take profit: $0.08 + $0.0016 = **$0.0816**
+
+**Resultado:**
+- Ganancia: ($0.0816 - $0.08) × 125 × 10 = **2.00 USDT** ✅
+
+### Ventajas
+
+- ✅ **Ganancias predecibles**: Siempre sabes exactamente cuánto ganarás
+- ✅ **Control de riesgo**: Puedes calcular fácilmente cuántas operaciones exitosas necesitas para recuperar pérdidas
+- ✅ **Gestión simple**: No necesitas calcular porcentajes manualmente
+- ✅ **Funciona con cualquier activo**: Se ajusta automáticamente al precio del token
+
+### Configuración
+
+El profit objetivo se configura en `config.py`:
+```python
+TARGET_PROFIT_USDT = 2.0  # Ganancia objetivo por operación en USDT
+```
+
+Puedes cambiar este valor según tus preferencias (ej: 1.0, 3.0, 5.0, etc.)
 
 ## 💡 Tamaño de Posición Dinámico
 
@@ -148,10 +197,16 @@ POSITION_SIZE_USDT = 5  # Tamaño fijo en USDT
 
 ## 📊 Estrategia de Trading
 
-1. **Entrada**: Compra cuando el precio cierra por encima de la EMA(20)
-2. **Salida**:
-   - Take Profit: Vende si la ganancia es >= +0.4%
-   - Stop Loss: Vende si la pérdida es <= -0.3%
+1. **Entrada LONG**: Compra cuando el precio cierra por encima de la EMA(12)
+2. **Entrada SHORT**: Vende cuando el precio cierra por debajo de la EMA(12)
+3. **Salida (Take Profit)**: 
+   - El bot calcula automáticamente el precio de cierre necesario para obtener **2 USDT de ganancia**
+   - Coloca una orden LIMIT al precio calculado
+   - Cuando el precio alcanza el objetivo, la orden se ejecuta automáticamente
+4. **Salida (Stop Loss)**: 
+   - Si la pérdida alcanza -0.4%, cierra la posición para limitar pérdidas
+5. **Cooldown**: Después de cerrar una posición, el bot espera 60 segundos antes de abrir una nueva
+6. **Prevención de duplicados**: El bot verifica posiciones abiertas y espera a que se cierren antes de abrir nuevas
 
 ## 🤝 Contribuir
 
